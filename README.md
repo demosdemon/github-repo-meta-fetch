@@ -1,6 +1,12 @@
 # github-repo-meta-fetch
 Synchronizes issues, pull requests, and other metadata about a GitHub repo into a Markdown file tree for AI agents to review offline.
 
+## Install
+
+```bash
+cargo install --locked --git https://github.com/demosdemon/github-repo-meta-fetch.git
+```
+
 ## Usage
 
 ```bash
