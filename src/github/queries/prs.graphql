@@ -1,0 +1,54 @@
+query PrsPage($owner: String!, $repo: String!, $cursor: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequests(first: 25, after: $cursor, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id
+        number
+        title
+        body
+        state
+        isDraft
+        merged
+        mergedAt
+        mergedBy { __typename login }
+        baseRefName
+        headRefName
+        additions
+        deletions
+        changedFiles
+        createdAt
+        updatedAt
+        closedAt
+        author { __typename login }
+        milestone { title }
+        labels(first: 50) { nodes { name } }
+        assignees(first: 20) { nodes { login } }
+        comments(first: 50) {
+          totalCount
+          pageInfo { hasNextPage endCursor }
+          nodes { id createdAt body author { __typename login } }
+        }
+        reviews(first: 50) {
+          pageInfo { hasNextPage endCursor }
+          nodes { id state submittedAt body author { __typename login } }
+        }
+        reviewThreads(first: 50) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id
+            path
+            line
+            isResolved
+            isOutdated
+            comments(first: 50) {
+              pageInfo { hasNextPage endCursor }
+              nodes { id createdAt body diffHunk author { __typename login } }
+            }
+          }
+        }
+        closingIssuesReferences(first: 50) { nodes { id number } }
+      }
+    }
+  }
+}

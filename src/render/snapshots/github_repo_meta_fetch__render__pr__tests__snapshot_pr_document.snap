@@ -1,0 +1,50 @@
+---
+source: src/render/pr.rs
+assertion_line: 217
+expression: doc
+---
+---
+number: 42
+title: "Add PRs"
+state: merged
+draft: false
+base: "main"
+head: "feature/prs"
+author: "octocat"
+created_at: 2026-06-10T00:00:00Z
+updated_at: 2026-06-14T00:00:00Z
+closed_at: 2026-06-14T00:00:00Z
+merged_at: 2026-06-14T00:00:00Z
+merged_by: "demosdemon"
+additions: 412
+deletions: 87
+changed_files: 9
+labels: ["area: sync", "bug"]
+assignees: ["demosdemon"]
+milestone: "v1.0"
+closes: [41]
+related: [38, 41]
+url: "https://github.com/o/r/pull/42"
+---
+
+# #42 — Add PRs
+
+Implements PR sync.
+
+## Conversation (0)
+
+## Reviews (1)
+
+### demosdemon · APPROVED · 2026-06-14T00:00:00Z
+LGTM
+
+## Review threads (1)
+
+### src/sync/mod.rs:88 · resolved
+```diff
+@@ -85,3 +85,4 @@
+-old
++new
+```
+
+**demosdemon · 2026-06-11T00:00:00Z:** pass the query type

@@ -1,0 +1,21 @@
+query ReviewThreadsPage($id: ID!, $cursor: String) {
+  node(id: $id) {
+    __typename
+    ... on PullRequest {
+      reviewThreads(first: 50, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          path
+          line
+          isResolved
+          isOutdated
+          comments(first: 50) {
+            pageInfo { hasNextPage endCursor }
+            nodes { id createdAt body diffHunk author { __typename login } }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+query TimelinePage($id: ID!, $cursor: String) {
+  node(id: $id) {
+    __typename
+    ... on Issue {
+      timelineItems(first: 100, after: $cursor, itemTypes: [
+        CROSS_REFERENCED_EVENT, CONNECTED_EVENT, DISCONNECTED_EVENT,
+        MARKED_AS_DUPLICATE_EVENT, UNMARKED_AS_DUPLICATE_EVENT
+      ]) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          __typename
+          ... on CrossReferencedEvent { createdAt source { __typename ... on Issue { number } ... on PullRequest { number } } }
+          ... on ConnectedEvent { createdAt subject { __typename ... on Issue { number } ... on PullRequest { number } } }
+          ... on DisconnectedEvent { createdAt subject { __typename ... on Issue { number } ... on PullRequest { number } } }
+          ... on MarkedAsDuplicateEvent { createdAt canonical { __typename ... on Issue { number } ... on PullRequest { number } } }
+          ... on UnmarkedAsDuplicateEvent { createdAt canonical { __typename ... on Issue { number } ... on PullRequest { number } } }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+query ReviewsPage($id: ID!, $cursor: String) {
+  node(id: $id) {
+    __typename
+    ... on PullRequest {
+      reviews(first: 50, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes { id state submittedAt body author { __typename login } }
+      }
+    }
+  }
+}
