@@ -1,5 +1,6 @@
 pub mod issues;
 pub mod prs;
+pub mod relationships;
 pub mod repo_meta;
 pub mod sync_state;
 pub mod taxonomy;
@@ -25,6 +26,7 @@ fn migrations() -> Migrations<'static> {
     Migrations::new(vec![
         M::up(include_str!("migrations/0001_init.sql")),
         M::up(include_str!("migrations/0002_pull_requests.sql")),
+        M::up(include_str!("migrations/0003_issue_relationships.sql")),
     ])
 }
 
