@@ -7,8 +7,14 @@ use crate::render::frontmatter::rfc3339;
 
 /// Full per-issue document: frontmatter + title + body + comments.
 #[must_use]
-pub fn render(issue: &Issue, related: &[i64], comments: &[Comment], html_url: &str) -> String {
-    let mut out = frontmatter::render(issue, related, html_url);
+pub fn render(
+    issue: &Issue,
+    related: &[i64],
+    rels: &crate::model::Relationships,
+    comments: &[Comment],
+    html_url: &str,
+) -> String {
+    let mut out = frontmatter::render(issue, related, rels, html_url);
     out.push('\n');
     writeln!(out, "# #{} — {}", issue.number, issue.title).ok();
     out.push('\n');
@@ -67,7 +73,13 @@ mod tests {
             created_at: dt("2026-01-06T00:00:00Z"),
             body: "Thanks for the report.".into(),
         }];
-        let doc = render(&issue, &[], &comments, "https://github.com/o/r/issues/42");
+        let doc = render(
+            &issue,
+            &[],
+            &crate::model::Relationships::default(),
+            &comments,
+            "https://github.com/o/r/issues/42",
+        );
         insta::assert_snapshot!(doc, @r#"
 ---
 number: 42
@@ -82,6 +94,11 @@ created_at: 2026-01-05T00:00:00Z
 updated_at: 2026-06-10T00:00:00Z
 closed_at: null
 related: []
+parent: null
+sub_issues: []
+blocked: 0
+blocked_by: []
+blocking: []
 url: "https://github.com/o/r/issues/42"
 ---
 

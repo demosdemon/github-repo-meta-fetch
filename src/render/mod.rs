@@ -218,12 +218,13 @@ pub fn render_tree(conn: &Connection, out: &Path) -> anyhow::Result<()> {
             continue;
         };
         let related = store::issues::related_numbers(conn, &iss.node_id)?;
+        let rels = store::relationships::relationships_for(conn, &iss.node_id)?;
         let comments = store::issues::list_comments(conn, &iss.node_id)?;
         let url = format!(
             "https://github.com/{}/{}/issues/{number}",
             meta.owner, meta.repo
         );
-        let doc = crate::render::issue::render(&iss, &related, &comments, &url);
+        let doc = crate::render::issue::render(&iss, &related, &rels, &comments, &url);
         let fname = format!("{number:0width$}.md");
         std::fs::write(issues_dir.join(&fname), doc)?;
         expected.insert(fname.clone());
