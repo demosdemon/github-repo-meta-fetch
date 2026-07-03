@@ -12,6 +12,33 @@ fn dt(s: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
 }
 
+/// Collect every file under `root` as (relative path, contents).
+fn tree_files(root: &std::path::Path) -> std::collections::BTreeMap<String, String> {
+    fn walk(
+        root: &std::path::Path,
+        dir: &std::path::Path,
+        out: &mut std::collections::BTreeMap<String, String>,
+    ) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if entry.file_type().unwrap().is_dir() {
+                walk(root, &path, out);
+            } else {
+                let rel = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string();
+                out.insert(rel, std::fs::read_to_string(&path).unwrap());
+            }
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    walk(root, root, &mut out);
+    out
+}
+
 fn sample_pr() -> PullRequest {
     PullRequest {
         node_id: "PR_1".into(),
@@ -62,25 +89,53 @@ fn rendering_twice_is_byte_identical() {
     store::issues::upsert_issue(&conn, &i).unwrap();
     store::prs::upsert_pull_request(&conn, &sample_pr()).unwrap();
 
+    let child = Issue {
+        node_id: "I2".into(),
+        number: 2,
+        ..i.clone()
+    };
+    store::issues::upsert_issue(&conn, &child).unwrap();
+    let ep = |node: &str, number: i64| github_repo_meta_fetch::model::RelEndpoint {
+        node_id: node.into(),
+        repo: None,
+        number,
+        state: IssueState::Open,
+        title: "t".into(),
+    };
+    store::relationships::replace_incident_edges(&conn, "I1", &[
+        github_repo_meta_fetch::model::RelEdge {
+            rel: github_repo_meta_fetch::model::RelKind::Parent,
+            src: ep("I1", 1),
+            dst: ep("I2", 2),
+            position: Some(0),
+        },
+        github_repo_meta_fetch::model::RelEdge {
+            rel: github_repo_meta_fetch::model::RelKind::Blocks,
+            src: ep("I2", 2),
+            dst: ep("I1", 1),
+            position: None,
+        },
+    ])
+    .unwrap();
+
     let a = tempfile::tempdir().unwrap();
     let b = tempfile::tempdir().unwrap();
     render::render_tree(&conn, a.path()).unwrap();
     render::render_tree(&conn, b.path()).unwrap();
 
-    // Issues subtree is byte-identical.
-    let fa = std::fs::read_to_string(a.path().join("issues/0001.md")).unwrap();
-    let fb = std::fs::read_to_string(b.path().join("issues/0001.md")).unwrap();
-    assert_eq!(fa, fb);
-
-    // PRs subtree is byte-identical.
-    let pa = std::fs::read_to_string(a.path().join("prs/0001.md")).unwrap();
-    let pb = std::fs::read_to_string(b.path().join("prs/0001.md")).unwrap();
-    assert_eq!(pa, pb);
-
-    // README is byte-identical.
-    let ra = std::fs::read_to_string(a.path().join("README.md")).unwrap();
-    let rb = std::fs::read_to_string(b.path().join("README.md")).unwrap();
-    assert_eq!(ra, rb);
-    // Confirm PR counts appear in the README.
-    assert!(ra.contains("open PRs: 1"), "README missing open PRs count");
+    let fa = tree_files(a.path());
+    let fb = tree_files(b.path());
+    assert_eq!(fa, fb, "full output trees must be byte-identical");
+    assert!(
+        fa.contains_key("hierarchy.md"),
+        "hierarchy.md must be rendered"
+    );
+    assert!(
+        fa["issues/0001.md"].contains("blocked: 1"),
+        "relationship keys must appear in frontmatter"
+    );
+    assert!(
+        fa["README.md"].contains("open PRs: 1"),
+        "README missing open PRs count"
+    );
 }
