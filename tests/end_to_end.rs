@@ -24,6 +24,10 @@ fn issue_page() -> String {
       "nodes":[{"id":"I_1","number":1,"title":"t","body":"b","state":"OPEN","stateReason":null,
         "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z","closedAt":null,
         "author":{"__typename":"User","login":"o"},"milestone":null,"labels":{"nodes":[]},"assignees":{"nodes":[]},
+        "parent":null,
+        "subIssues":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]},
+        "blockedBy":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]},
+        "blocking":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]},
         "comments":{"totalCount":0,"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]},
         "timelineItems":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}]}}}}"#.to_string()
 }

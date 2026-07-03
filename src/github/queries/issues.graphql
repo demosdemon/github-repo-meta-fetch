@@ -16,6 +16,19 @@ query IssuesPage($owner: String!, $repo: String!, $cursor: String) {
         milestone { title }
         labels(first: 50) { nodes { name } }
         assignees(first: 20) { nodes { login } }
+        parent { id number state title repository { nameWithOwner } }
+        subIssues(first: 50) {
+          pageInfo { hasNextPage endCursor }
+          nodes { id number state title repository { nameWithOwner } }
+        }
+        blockedBy(first: 50) {
+          pageInfo { hasNextPage endCursor }
+          nodes { id number state title repository { nameWithOwner } }
+        }
+        blocking(first: 50) {
+          pageInfo { hasNextPage endCursor }
+          nodes { id number state title repository { nameWithOwner } }
+        }
         comments(first: 50) {
           totalCount
           pageInfo { hasNextPage endCursor }

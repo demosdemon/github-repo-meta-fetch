@@ -53,6 +53,30 @@ pub struct ReviewsPage;
 )]
 pub struct ReviewThreadsPage;
 
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "github-schema.json",
+    query_path = "src/github/queries/sub_issues.graphql",
+    response_derives = "Debug,Clone"
+)]
+pub struct SubIssuesPage;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "github-schema.json",
+    query_path = "src/github/queries/blocked_by.graphql",
+    response_derives = "Debug,Clone"
+)]
+pub struct BlockedByPage;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "github-schema.json",
+    query_path = "src/github/queries/blocking.graphql",
+    response_derives = "Debug,Clone"
+)]
+pub struct BlockingPage;
+
 #[cfg(test)]
 mod tests {
     use graphql_client::GraphQLQuery as _;
@@ -98,6 +122,10 @@ mod tests {
               "closedAt": null, "author": {"__typename": "User", "login": "octocat"}, "milestone": null,
               "labels": {"nodes": [{"name": "bug"}]},
               "assignees": {"nodes": [{"login": "octocat"}]},
+              "parent": null,
+              "subIssues": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []},
+              "blockedBy": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []},
+              "blocking": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []},
               "comments": {"totalCount": 0, "pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []},
               "timelineItems": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}
             }]
@@ -108,5 +136,17 @@ mod tests {
         let data = resp.data.unwrap();
         let issues = data.repository.unwrap().issues;
         assert_eq!(issues.nodes.unwrap()[0].as_ref().unwrap().number, 42);
+    }
+
+    #[test]
+    fn sub_issues_query_builds_body() {
+        use super::SubIssuesPage;
+        use super::sub_issues_page;
+        let body = SubIssuesPage::build_query(sub_issues_page::Variables {
+            id: "I_1".into(),
+            cursor: None,
+        });
+        let json = serde_json::to_value(&body).unwrap();
+        assert!(json["query"].as_str().unwrap().contains("subIssues("));
     }
 }

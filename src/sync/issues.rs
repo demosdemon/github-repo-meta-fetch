@@ -549,6 +549,10 @@ mod tests {
           "createdAt":"2026-01-05T00:00:00Z","updatedAt":"2026-06-10T00:00:00Z","closedAt":null,
           "author":{"__typename":"User","login":"octocat"},"milestone":{"title":"v1.0"},
           "labels":{"nodes":[{"name":"bug"}]},"assignees":{"nodes":[{"login":"octocat"}]},
+          "parent":null,
+          "subIssues":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]},
+          "blockedBy":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]},
+          "blocking":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]},
           "comments":{"totalCount":0,"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]},
           "timelineItems":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}
         });
@@ -573,6 +577,10 @@ mod tests {
           "closedAt":"2026-06-11T00:00:00Z",
           "author":null,"milestone":null,
           "labels":{"nodes":[]},"assignees":{"nodes":[]},
+          "parent":null,
+          "subIssues":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]},
+          "blockedBy":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]},
+          "blocking":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]},
           "comments":{"totalCount":1,"pageInfo":{"hasNextPage":true,"endCursor":"CC"},"nodes":[
             {"id":"C_1","createdAt":"2026-02-01T00:00:00Z","body":"hi","author":{"__typename":"User","login":"bot"}}
           ]},

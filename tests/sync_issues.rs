@@ -14,6 +14,10 @@ fn issue_node(num: i64, updated: &str) -> String {
         r#"{{"id":"I_{num}","number":{num},"title":"t{num}","body":"b","state":"OPEN","stateReason":null,
       "createdAt":"2026-01-01T00:00:00Z","updatedAt":"{updated}","closedAt":null,
       "author":{{"__typename":"User","login":"o"}},"milestone":null,"labels":{{"nodes":[]}},"assignees":{{"nodes":[]}},
+      "parent":null,
+      "subIssues":{{"pageInfo":{{"hasNextPage":false,"endCursor":null}},"nodes":[]}},
+      "blockedBy":{{"pageInfo":{{"hasNextPage":false,"endCursor":null}},"nodes":[]}},
+      "blocking":{{"pageInfo":{{"hasNextPage":false,"endCursor":null}},"nodes":[]}},
       "comments":{{"totalCount":0,"pageInfo":{{"hasNextPage":false,"endCursor":null}},"nodes":[]}},
       "timelineItems":{{"pageInfo":{{"hasNextPage":false,"endCursor":null}},"nodes":[]}}}}"#
     )

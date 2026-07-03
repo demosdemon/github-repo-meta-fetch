@@ -1,0 +1,11 @@
+query SubIssuesPage($id: ID!, $cursor: String) {
+  node(id: $id) {
+    __typename
+    ... on Issue {
+      subIssues(first: 50, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes { id number state title repository { nameWithOwner } }
+      }
+    }
+  }
+}
