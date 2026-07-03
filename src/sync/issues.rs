@@ -517,6 +517,77 @@ async fn drain_timeline(
     Ok(())
 }
 
+/// Drain one issue's follow-up comment/timeline/relationship pages and
+/// persist it (issue row, comments, cross-refs, relationship edges) in a
+/// single transaction.
+async fn persist_issue(
+    client: &crate::github::GithubClient,
+    conn: &Connection,
+    repo_full: &str,
+    m: MappedIssue,
+) -> anyhow::Result<()> {
+    let mut comments = m.comments;
+    if let Some(c) = m.comments_more {
+        let _headers = drain_comments(client, &m.issue.node_id, Some(c), &mut comments).await?;
+    }
+    let mut cross_refs = m.cross_refs;
+    if let Some(c) = m.timeline_more {
+        drain_timeline(client, &m.issue.node_id, Some(c), &mut cross_refs).await?;
+    }
+
+    let mut edges = m.edges;
+    let self_ep = self_endpoint(&m.issue);
+    if let Some(c) = m.sub_issues_more {
+        // Continue positions where the inline page left off.
+        let offset = i64::try_from(
+            edges
+                .iter()
+                .filter(|e| e.rel == RelKind::Parent && e.src.node_id == m.issue.node_id)
+                .count(),
+        )
+        .unwrap_or(i64::MAX);
+        crate::sync::relationships::drain_sub_issues(
+            client,
+            &self_ep,
+            repo_full,
+            Some(c),
+            offset,
+            &mut edges,
+        )
+        .await?;
+    }
+    if let Some(c) = m.blocked_by_more {
+        crate::sync::relationships::drain_blocked_by(
+            client,
+            &self_ep,
+            repo_full,
+            Some(c),
+            &mut edges,
+        )
+        .await?;
+    }
+    if let Some(c) = m.blocking_more {
+        crate::sync::relationships::drain_blocking(
+            client,
+            &self_ep,
+            repo_full,
+            Some(c),
+            &mut edges,
+        )
+        .await?;
+    }
+
+    let tx = conn.unchecked_transaction()?;
+    upsert_issue(&tx, &m.issue)?;
+    replace_comments(&tx, &m.issue.node_id, &comments)?;
+    for x in &cross_refs {
+        upsert_cross_ref(&tx, x)?;
+    }
+    crate::store::relationships::replace_incident_edges(&tx, &m.issue.node_id, &edges)?;
+    tx.commit()?;
+    Ok(())
+}
+
 /// Incrementally synchronise issues for `owner/repo`.
 ///
 /// Paginates `repository.issues` (`UPDATED_AT DESC`), early-stopping when an
@@ -550,6 +621,7 @@ where
     // Collect seen node_ids only when doing a full run (for deletion
     // reconciliation).
     let mut seen: HashSet<String> = HashSet::new();
+    let repo_full = format!("{owner}/{repo}");
 
     loop {
         let body = IssuesPage::build_query(issues_page::Variables {
@@ -577,7 +649,7 @@ where
 
         let mut crossed = false;
         for node in nodes.into_iter().flatten() {
-            let m = map_issue_node(&node, &format!("{owner}/{repo}"));
+            let m = map_issue_node(&node, &repo_full);
 
             if !full
                 && let Some(wm) = watermark
@@ -594,23 +666,7 @@ where
                 seen.insert(m.issue.node_id.clone());
             }
 
-            let mut comments = m.comments;
-            if let Some(c) = m.comments_more {
-                let _headers =
-                    drain_comments(client, &m.issue.node_id, Some(c), &mut comments).await?;
-            }
-            let mut cross_refs = m.cross_refs;
-            if let Some(c) = m.timeline_more {
-                drain_timeline(client, &m.issue.node_id, Some(c), &mut cross_refs).await?;
-            }
-
-            let tx = conn.unchecked_transaction()?;
-            upsert_issue(&tx, &m.issue)?;
-            replace_comments(&tx, &m.issue.node_id, &comments)?;
-            for x in &cross_refs {
-                upsert_cross_ref(&tx, x)?;
-            }
-            tx.commit()?;
+            persist_issue(client, conn, &repo_full, m).await?;
         }
 
         sync_state::set_cursor(

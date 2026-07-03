@@ -6,6 +6,9 @@ pub enum QueryType {
     CommentsPage,
     TimelinePage,
     PrsPage,
+    SubIssuesPage,
+    BlockedByPage,
+    BlockingPage,
 }
 
 impl QueryType {
@@ -15,9 +18,16 @@ impl QueryType {
     #[must_use]
     pub fn ceiling(self) -> u64 {
         match self {
-            QueryType::IssuesPage => 30,
+            // Raised from 30 when the issues query gained parent/subIssues/
+            // blockedBy/blocking connections (~2-3x point cost per page);
+            // refine against observed X-RateLimit headers.
+            QueryType::IssuesPage => 90,
             QueryType::PrsPage => 40,
-            QueryType::CommentsPage | QueryType::TimelinePage => 10,
+            QueryType::CommentsPage
+            | QueryType::TimelinePage
+            | QueryType::SubIssuesPage
+            | QueryType::BlockedByPage
+            | QueryType::BlockingPage => 10,
         }
     }
 }
@@ -76,23 +86,23 @@ mod tests {
     #[test]
     fn first_call_uses_ceiling() {
         let est = CostEstimator::new(None);
-        assert_eq!(est.estimate(QueryType::IssuesPage), 30);
+        assert_eq!(est.estimate(QueryType::IssuesPage), 90);
     }
 
     #[test]
     fn estimate_never_below_ceiling_even_after_cheap_pages() {
         let mut est = CostEstimator::new(None);
         est.observe(QueryType::IssuesPage, 1);
-        assert_eq!(est.estimate(QueryType::IssuesPage), 30);
+        assert_eq!(est.estimate(QueryType::IssuesPage), 90);
     }
 
     #[test]
     fn estimate_rises_with_expensive_observations() {
         let mut est = CostEstimator::new(None);
         for _ in 0..10 {
-            est.observe(QueryType::IssuesPage, 100);
+            est.observe(QueryType::IssuesPage, 300);
         }
-        assert!(est.estimate(QueryType::IssuesPage) > 30);
+        assert!(est.estimate(QueryType::IssuesPage) > 90);
     }
 
     #[test]
@@ -105,5 +115,13 @@ mod tests {
     fn prs_page_ceiling_is_conservative() {
         let est = CostEstimator::new(None);
         assert_eq!(est.estimate(QueryType::PrsPage), 40);
+    }
+
+    #[test]
+    fn relationship_drain_ceilings_are_conservative() {
+        let est = CostEstimator::new(None);
+        assert_eq!(est.estimate(QueryType::SubIssuesPage), 10);
+        assert_eq!(est.estimate(QueryType::BlockedByPage), 10);
+        assert_eq!(est.estimate(QueryType::BlockingPage), 10);
     }
 }
