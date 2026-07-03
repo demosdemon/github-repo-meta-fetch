@@ -1,5 +1,6 @@
 pub mod issues;
 pub mod prs;
+pub(crate) mod relationships;
 pub mod taxonomy;
 
 use std::time::Duration;

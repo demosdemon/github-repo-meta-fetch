@@ -26,12 +26,17 @@ use crate::model::CrossRef;
 use crate::model::CrossRefEvent;
 use crate::model::Issue;
 use crate::model::IssueState;
+use crate::model::RelEdge;
+use crate::model::RelEndpoint;
+use crate::model::RelKind;
 use crate::store::issues::replace_comments;
 use crate::store::issues::upsert_cross_ref;
 use crate::store::issues::upsert_issue;
 use crate::store::sync_state;
 use crate::store::sync_state::RunPhase;
 use crate::sync::next_cursor;
+use crate::sync::relationships::endpoint;
+use crate::sync::relationships::self_endpoint;
 
 const ENTITY: &str = "issues";
 
@@ -44,6 +49,13 @@ pub struct MappedIssue {
     pub comments_more: Option<String>,
     /// `endCursor` of the embedded timeline page when it has a next page.
     pub timeline_more: Option<String>,
+    pub edges: Vec<crate::model::RelEdge>,
+    /// `endCursor` of the embedded sub-issues page when it has a next page.
+    pub sub_issues_more: Option<String>,
+    /// `endCursor` of the embedded blocked-by page when it has a next page.
+    pub blocked_by_more: Option<String>,
+    /// `endCursor` of the embedded blocking page when it has a next page.
+    pub blocking_more: Option<String>,
 }
 
 /// Outcome of a sync run.
@@ -63,7 +75,10 @@ fn author_login(
 
 /// Map a single issue node into domain types and follow-up cursors.
 #[must_use]
-pub fn map_issue_node(node: &issues_page::IssuesPageRepositoryIssuesNodes) -> MappedIssue {
+pub fn map_issue_node(
+    node: &issues_page::IssuesPageRepositoryIssuesNodes,
+    repo_full: &str,
+) -> MappedIssue {
     let state = match node.state {
         issues_page::IssueState::OPEN => IssueState::Open,
         _ => IssueState::Closed,
@@ -140,13 +155,104 @@ pub fn map_issue_node(node: &issues_page::IssuesPageRepositoryIssuesNodes) -> Ma
         node.timeline_items.nodes.as_deref().unwrap_or(&[]),
     );
 
+    let self_ep = self_endpoint(&issue);
+    let edges = map_relationship_edges(node, repo_full, &self_ep);
+
+    let sub_issues_more = next_cursor(
+        node.sub_issues.page_info.has_next_page,
+        node.sub_issues.page_info.end_cursor.as_deref(),
+    );
+    let blocked_by_more = next_cursor(
+        node.blocked_by.page_info.has_next_page,
+        node.blocked_by.page_info.end_cursor.as_deref(),
+    );
+    let blocking_more = next_cursor(
+        node.blocking.page_info.has_next_page,
+        node.blocking.page_info.end_cursor.as_deref(),
+    );
+
     MappedIssue {
         issue,
         comments,
         cross_refs,
         comments_more,
         timeline_more,
+        edges,
+        sub_issues_more,
+        blocked_by_more,
+        blocking_more,
     }
+}
+
+/// Map the four incident relationship roles (parent, sub-issues, blocked-by,
+/// blocking) of one issue node into edges anchored on `self_ep`.
+fn map_relationship_edges(
+    node: &issues_page::IssuesPageRepositoryIssuesNodes,
+    repo_full: &str,
+    self_ep: &RelEndpoint,
+) -> Vec<RelEdge> {
+    let mut edges = Vec::new();
+
+    if let Some(p) = node.parent.as_ref() {
+        edges.push(RelEdge {
+            rel: RelKind::Parent,
+            src: endpoint(p, repo_full),
+            dst: self_ep.clone(),
+            position: None,
+        });
+    }
+    // Position is the index among *visible* nodes: a null node (target the
+    // token cannot read) compresses subsequent positions. Only relative
+    // sibling order is ever consumed, so this divergence from the raw
+    // connection offset is intentional.
+    for (i, child) in node
+        .sub_issues
+        .nodes
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .flatten()
+        .enumerate()
+    {
+        edges.push(RelEdge {
+            rel: RelKind::Parent,
+            src: self_ep.clone(),
+            dst: endpoint(child, repo_full),
+            position: Some(i64::try_from(i).unwrap_or(i64::MAX)),
+        });
+    }
+    for blocker in node
+        .blocked_by
+        .nodes
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .flatten()
+    {
+        edges.push(RelEdge {
+            rel: RelKind::Blocks,
+            src: endpoint(blocker, repo_full),
+            dst: self_ep.clone(),
+            position: None,
+        });
+    }
+    for blocked in node
+        .blocking
+        .nodes
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .flatten()
+    {
+        edges.push(RelEdge {
+            rel: RelKind::Blocks,
+            src: self_ep.clone(),
+            dst: endpoint(blocked, repo_full),
+            position: None,
+        });
+    }
+
+    edges
 }
 
 /// One timeline node's cross-reference projection: `(referenced_number, event,
@@ -471,7 +577,7 @@ where
 
         let mut crossed = false;
         for node in nodes.into_iter().flatten() {
-            let m = map_issue_node(&node);
+            let m = map_issue_node(&node, &format!("{owner}/{repo}"));
 
             if !full
                 && let Some(wm) = watermark
@@ -558,7 +664,7 @@ mod tests {
         });
         let node: issues_page::IssuesPageRepositoryIssuesNodes =
             serde_json::from_value(fixture).unwrap();
-        let m = map_issue_node(&node);
+        let m = map_issue_node(&node, "o/r");
         assert_eq!(m.issue.number, 42);
         assert_eq!(m.issue.state, IssueState::Open);
         assert_eq!(m.issue.author.as_deref(), Some("octocat"));
@@ -567,6 +673,7 @@ mod tests {
         assert_eq!(m.issue.assignees, vec!["octocat".to_string()]);
         assert_eq!(m.comments_more, None);
         assert_eq!(m.timeline_more, None);
+        assert!(m.edges.is_empty());
     }
 
     #[test]
@@ -591,7 +698,7 @@ mod tests {
         });
         let node: issues_page::IssuesPageRepositoryIssuesNodes =
             serde_json::from_value(fixture).unwrap();
-        let m = map_issue_node(&node);
+        let m = map_issue_node(&node, "o/r");
         assert_eq!(m.issue.state, IssueState::Closed);
         assert_eq!(m.issue.state_reason.as_deref(), Some("completed"));
         assert_eq!(m.issue.author, None);
@@ -602,5 +709,81 @@ mod tests {
         assert_eq!(m.cross_refs.len(), 1);
         assert_eq!(m.cross_refs[0].referenced_issue_number, 99);
         assert_eq!(m.cross_refs[0].event_type, CrossRefEvent::CrossReferenced);
+    }
+
+    /// A relationship target node as embedded JSON.
+    fn rel_node(id: &str, number: i64, state: &str, repo: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id, "number": number, "state": state, "title": format!("t{number}"),
+            "repository": {"nameWithOwner": repo}
+        })
+    }
+
+    #[test]
+    fn maps_relationship_edges_and_cursors() {
+        use crate::model::RelKind;
+        let fixture = serde_json::json!({
+          "id":"I_X","number":10,"title":"X","body":"","state":"OPEN","stateReason":null,
+          "createdAt":"2026-01-05T00:00:00Z","updatedAt":"2026-06-10T00:00:00Z","closedAt":null,
+          "author":null,"milestone":null,
+          "labels":{"nodes":[]},"assignees":{"nodes":[]},
+          "comments":{"totalCount":0,"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]},
+          "timelineItems":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]},
+          "parent": rel_node("I_P", 1, "OPEN", "O/R"),
+          "subIssues": {"pageInfo":{"hasNextPage":true,"endCursor":"SC"},
+                        "nodes":[rel_node("I_C", 11, "OPEN", "o/r"), rel_node("EXT_C", 5, "CLOSED", "acme/infra")]},
+          "blockedBy": {"pageInfo":{"hasNextPage":false,"endCursor":null},
+                        "nodes":[rel_node("I_B", 9, "OPEN", "o/r")]},
+          "blocking":  {"pageInfo":{"hasNextPage":false,"endCursor":null},
+                        "nodes":[rel_node("I_Z", 12, "OPEN", "o/r")]}
+        });
+        let node: issues_page::IssuesPageRepositoryIssuesNodes =
+            serde_json::from_value(fixture).unwrap();
+        let m = map_issue_node(&node, "o/r");
+
+        assert_eq!(m.sub_issues_more.as_deref(), Some("SC"));
+        assert_eq!(m.blocked_by_more, None);
+        assert_eq!(m.blocking_more, None);
+        assert_eq!(m.edges.len(), 5);
+
+        // Parent edge: repo compare is case-insensitive ("O/R" == "o/r" → None).
+        let parent = m
+            .edges
+            .iter()
+            .find(|e| e.rel == RelKind::Parent && e.dst.node_id == "I_X")
+            .unwrap();
+        assert_eq!(parent.src.node_id, "I_P");
+        assert_eq!(parent.src.repo, None);
+        assert_eq!(parent.position, None);
+
+        // Sub-issue edges carry absolute positions and cross-repo snapshots.
+        let c0 = m
+            .edges
+            .iter()
+            .find(|e| e.rel == RelKind::Parent && e.dst.node_id == "I_C")
+            .unwrap();
+        assert_eq!(c0.position, Some(0));
+        let c1 = m
+            .edges
+            .iter()
+            .find(|e| e.rel == RelKind::Parent && e.dst.node_id == "EXT_C")
+            .unwrap();
+        assert_eq!(c1.position, Some(1));
+        assert_eq!(c1.dst.repo.as_deref(), Some("acme/infra"));
+        assert_eq!(c1.dst.state, IssueState::Closed);
+
+        // Dependency edges point blocker → blocked.
+        let blocked_by = m
+            .edges
+            .iter()
+            .find(|e| e.rel == RelKind::Blocks && e.dst.node_id == "I_X")
+            .unwrap();
+        assert_eq!(blocked_by.src.node_id, "I_B");
+        let blocking = m
+            .edges
+            .iter()
+            .find(|e| e.rel == RelKind::Blocks && e.src.node_id == "I_X")
+            .unwrap();
+        assert_eq!(blocking.dst.node_id, "I_Z");
     }
 }
