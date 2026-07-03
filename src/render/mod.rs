@@ -1,4 +1,5 @@
 pub mod frontmatter;
+pub mod hierarchy;
 pub mod indexes;
 pub mod issue;
 pub mod pr;
@@ -188,6 +189,16 @@ fn write_taxonomy_docs(
     Ok(())
 }
 
+/// Write `hierarchy.md` into `out`.
+fn write_hierarchy_doc(conn: &Connection, out: &Path, width: usize) -> anyhow::Result<()> {
+    let parent_edges = store::relationships::all_parent_edges(conn)?;
+    std::fs::write(
+        out.join("hierarchy.md"),
+        hierarchy::hierarchy_doc(&parent_edges, width),
+    )?;
+    Ok(())
+}
+
 /// Project the repo DB into a Markdown tree rooted at `out`. Non-deleted issues
 /// only. Deleted issues whose files exist are removed. Writes README,
 /// labels.md, milestones.md, issues/, prs/, and cross-cutting
@@ -252,6 +263,7 @@ pub fn render_tree(conn: &Connection, out: &Path) -> anyhow::Result<()> {
     );
     write_indexes(&issues_dir, &groups, &["open", "closed"])?;
     write_taxonomy_docs(conn, out, &groups.1)?;
+    write_hierarchy_doc(conn, out, width)?;
 
     render_prs(conn, out, width, &meta)?;
 
@@ -565,5 +577,65 @@ mod tests {
         render_tree(&conn, tmp.path()).unwrap();
         assert!(!tmp.path().join("prs/0002.md").exists());
         assert!(tmp.path().join("prs/0001.md").exists());
+    }
+
+    #[test]
+    fn writes_hierarchy_with_orphan_promotion() {
+        let conn = store::open_in_memory().unwrap();
+        store::repo_meta::ensure(&conn, "o", "r").unwrap();
+        store::issues::upsert_issue(&conn, &issue("P", 1, true)).unwrap(); // deleted parent
+        store::issues::upsert_issue(&conn, &issue("M", 2, false)).unwrap();
+        store::issues::upsert_issue(&conn, &issue("C", 3, false)).unwrap();
+        // P → M → C; P is soft-deleted, so M must be promoted to root.
+        store::relationships::replace_incident_edges(&conn, "M", &[
+            crate::model::RelEdge {
+                rel: crate::model::RelKind::Parent,
+                src: crate::model::RelEndpoint {
+                    node_id: "P".into(),
+                    repo: None,
+                    number: 1,
+                    state: IssueState::Open,
+                    title: "t".into(),
+                },
+                dst: crate::model::RelEndpoint {
+                    node_id: "M".into(),
+                    repo: None,
+                    number: 2,
+                    state: IssueState::Open,
+                    title: "t".into(),
+                },
+                position: None,
+            },
+            crate::model::RelEdge {
+                rel: crate::model::RelKind::Parent,
+                src: crate::model::RelEndpoint {
+                    node_id: "M".into(),
+                    repo: None,
+                    number: 2,
+                    state: IssueState::Open,
+                    title: "t".into(),
+                },
+                dst: crate::model::RelEndpoint {
+                    node_id: "C".into(),
+                    repo: None,
+                    number: 3,
+                    state: IssueState::Open,
+                    title: "t".into(),
+                },
+                position: Some(0),
+            },
+        ])
+        .unwrap();
+
+        let tmp = tempfile::tempdir().unwrap();
+        render_tree(&conn, tmp.path()).unwrap();
+        let doc = std::fs::read_to_string(tmp.path().join("hierarchy.md")).unwrap();
+        assert!(doc.starts_with("# Issue hierarchy"), "{doc}");
+        assert!(
+            !doc.contains("#1 "),
+            "deleted parent must not appear: {doc}"
+        );
+        assert!(doc.contains("- [#2 t](issues/0002.md) (open)"), "{doc}");
+        assert!(doc.contains("  - [#3 t](issues/0003.md) (open)"), "{doc}");
     }
 }
