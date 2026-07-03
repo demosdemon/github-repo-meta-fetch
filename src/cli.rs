@@ -232,6 +232,8 @@ impl Status {
         let ps = crate::store::sync_state::get(&conn, "pull_requests")?;
         println!("{}/{}", meta.owner, meta.repo);
         println!("issues: {open} active, {deleted} soft-deleted");
+        let (dep_edges, sub_edges) = crate::store::relationships::edge_counts(&conn)?;
+        println!("relationships: {dep_edges} dependency, {sub_edges} sub-issue");
         println!("run_phase: {:?}", s.run_phase);
         println!("watermark: {:?}", s.updated_watermark);
         println!("last_full_sync_at: {:?}", meta.last_full_sync_at);
