@@ -129,6 +129,112 @@ pub struct CrossRef {
     pub created_at: DateTime<Utc>,
 }
 
+/// The kind of a stored relationship edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelKind {
+    /// `src` blocks `dst`.
+    Blocks,
+    /// `src` is the parent of `dst`.
+    Parent,
+}
+
+impl RelKind {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RelKind::Blocks => "blocks",
+            RelKind::Parent => "parent",
+        }
+    }
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "blocks" => Some(RelKind::Blocks),
+            "parent" => Some(RelKind::Parent),
+            _ => None,
+        }
+    }
+}
+
+/// One endpoint of a relationship edge, with fetch-time snapshot fields.
+/// `repo` is `None` when the endpoint lives in the synced repo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelEndpoint {
+    pub node_id: String,
+    pub repo: Option<String>,
+    pub number: i64,
+    pub state: IssueState,
+    pub title: String,
+}
+
+/// A directed relationship edge: `blocker → blocked` or `parent → child`.
+/// `position` is the child's index within its parent's sub-issue list; `None`
+/// for `Blocks` edges and for parent edges discovered from the child side.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelEdge {
+    pub rel: RelKind,
+    pub src: RelEndpoint,
+    pub dst: RelEndpoint,
+    pub position: Option<i64>,
+}
+
+/// A relationship target resolved for rendering: live `issues`-table values
+/// for same-repo endpoints, stored snapshots for cross-repo ones.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelTarget {
+    pub node_id: String,
+    pub repo: Option<String>,
+    pub number: i64,
+    pub state: IssueState,
+    pub title: String,
+    pub position: Option<i64>,
+}
+
+impl RelTarget {
+    /// Reference string: `#N` for same-repo, `owner/repo#N` for external.
+    #[must_use]
+    pub fn reference(&self) -> String {
+        match &self.repo {
+            Some(r) => format!("{r}#{}", self.number),
+            None => format!("#{}", self.number),
+        }
+    }
+}
+
+/// Ordering for `blocked_by`/`blocking` lists: same-repo first by number,
+/// then external by `owner/repo`, then number.
+#[must_use]
+pub fn cmp_reference(a: &RelTarget, b: &RelTarget) -> std::cmp::Ordering {
+    match (&a.repo, &b.repo) {
+        (None, None) => a.number.cmp(&b.number),
+        (None, Some(_)) => std::cmp::Ordering::Less,
+        (Some(_), None) => std::cmp::Ordering::Greater,
+        (Some(x), Some(y)) => x.cmp(y).then(a.number.cmp(&b.number)),
+    }
+}
+
+/// Sibling ordering shared by the `sub_issues` frontmatter key and
+/// `hierarchy.md`: `position` ascending, `NULL`s last, tiebreak by number.
+#[must_use]
+pub fn cmp_siblings(a: &RelTarget, b: &RelTarget) -> std::cmp::Ordering {
+    match (a.position, b.position) {
+        (Some(x), Some(y)) => x.cmp(&y).then(a.number.cmp(&b.number)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.number.cmp(&b.number),
+    }
+}
+
+/// All relationships of one issue, resolved for rendering. Lists are
+/// unsorted — render applies [`cmp_siblings`] / [`cmp_reference`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Relationships {
+    pub parent: Option<RelTarget>,
+    pub sub_issues: Vec<RelTarget>,
+    pub blocked_by: Vec<RelTarget>,
+    pub blocking: Vec<RelTarget>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Label {
     pub node_id: String,
@@ -350,6 +456,67 @@ mod tests {
             CrossRefEvent::parse("CLOSING_REFERENCE"),
             Some(CrossRefEvent::ClosingReference)
         );
+    }
+
+    #[test]
+    fn rel_kind_round_trips() {
+        for k in [RelKind::Blocks, RelKind::Parent] {
+            assert_eq!(RelKind::parse(k.as_str()), Some(k));
+        }
+        assert_eq!(RelKind::parse("nope"), None);
+    }
+
+    fn target(repo: Option<&str>, number: i64, position: Option<i64>) -> RelTarget {
+        RelTarget {
+            node_id: format!("N{number}"),
+            repo: repo.map(str::to_string),
+            number,
+            state: IssueState::Open,
+            title: "t".into(),
+            position,
+        }
+    }
+
+    #[test]
+    fn reference_formats_local_and_external() {
+        assert_eq!(target(None, 12, None).reference(), "#12");
+        assert_eq!(
+            target(Some("acme/infra"), 4, None).reference(),
+            "acme/infra#4"
+        );
+    }
+
+    #[test]
+    fn cmp_reference_orders_local_first_then_repo_then_number() {
+        let mut v = [
+            target(Some("acme/infra"), 4, None),
+            target(None, 102, None),
+            target(Some("acme/api"), 9, None),
+            target(None, 9, None),
+            target(Some("acme/infra"), 2, None),
+        ];
+        v.sort_by(cmp_reference);
+        let refs: Vec<String> = v.iter().map(RelTarget::reference).collect();
+        assert_eq!(refs, [
+            "#9",
+            "#102",
+            "acme/api#9",
+            "acme/infra#2",
+            "acme/infra#4"
+        ]);
+    }
+
+    #[test]
+    fn cmp_siblings_orders_position_then_nulls_last_then_number() {
+        let mut v = [
+            target(None, 5, None),
+            target(None, 9, Some(0)),
+            target(None, 2, None),
+            target(None, 1, Some(1)),
+        ];
+        v.sort_by(cmp_siblings);
+        let nums: Vec<i64> = v.iter().map(|t| t.number).collect();
+        assert_eq!(nums, [9, 1, 2, 5]);
     }
 
     #[test]
