@@ -21,6 +21,7 @@ pub struct LabelRow {
 
 /// One row in the milestones document.
 pub struct MilestoneRow {
+    pub number: i64,
     pub title: String,
     pub state: String,
     pub due_on: Option<String>, // pre-formatted date or None
@@ -81,13 +82,14 @@ pub fn labels_doc(rows: &[LabelRow]) -> String {
 pub fn milestones_doc(rows: &[MilestoneRow]) -> String {
     use std::fmt::Write as _;
     let mut out = String::from(
-        "# Milestones\n\n| title | state | due | open | closed |\n| :--- | :--- | :--- | ---: | ---: |\n",
+        "# Milestones\n\n| # | title | state | due | open | closed |\n| ---: | :--- | :--- | :--- | ---: | ---: |\n",
     );
     for r in rows {
         let due = r.due_on.as_deref().unwrap_or("");
         writeln!(
             out,
-            "| {} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} | {} |",
+            r.number,
             esc(&r.title),
             esc(&r.state),
             esc(due),
@@ -140,5 +142,20 @@ mod tests {
         }];
         let d = labels_doc(&rows);
         assert!(d.contains("| bug | `#f00` | 5 | a bug |"));
+    }
+
+    #[test]
+    fn milestones_doc_has_numbers() {
+        let rows = vec![MilestoneRow {
+            number: 3,
+            title: "v1.0".into(),
+            state: "open".into(),
+            due_on: Some("2026-07-01".into()),
+            open: 2,
+            closed: 1,
+        }];
+        let d = milestones_doc(&rows);
+        assert!(d.contains("| # | title | state | due | open | closed |"));
+        assert!(d.contains("| 3 | v1.0 | open | 2026-07-01 | 2 | 1 |"));
     }
 }

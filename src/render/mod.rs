@@ -171,6 +171,7 @@ fn write_taxonomy_docs(
                 rows.iter().filter(|r| r.state == "closed").count()
             });
             MilestoneRow {
+                number: m.number,
                 due_on: m.due_on.map(|d| d.date_naive().to_string()),
                 title: m.title,
                 state: m.state,
