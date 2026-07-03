@@ -145,6 +145,10 @@ const DST_TARGETS_SQL: &str = "\
 
 /// All relationships of one issue, resolved for rendering (unsorted).
 ///
+/// A same-repo target not yet synced resolves from its snapshot; rendered
+/// links to it dangle until that issue is fetched (the migration-0003
+/// backfill walk self-heals this).
+///
 /// # Errors
 ///
 /// Returns a [`rusqlite::Error`] if any query or row conversion fails.
@@ -161,6 +165,10 @@ pub fn relationships_for(conn: &Connection, node_id: &str) -> rusqlite::Result<R
 
 /// Every parent → child edge with both endpoints resolved, excluding edges
 /// where either same-repo endpoint is soft-deleted. Unsorted.
+///
+/// A same-repo endpoint not yet synced resolves from its snapshot; rendered
+/// links to it dangle until that issue is fetched (the migration-0003
+/// backfill walk self-heals this).
 ///
 /// # Errors
 ///
