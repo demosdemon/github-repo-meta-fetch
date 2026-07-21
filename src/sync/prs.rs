@@ -445,7 +445,8 @@ where
     let watermark = state.updated_watermark;
     let started_fresh = state.resume_cursor.is_none();
     let mut cursor = state.resume_cursor;
-    let mut run_min: Option<DateTime<Utc>> = None;
+    // Highest `updatedAt` seen this pass: the early-stop floor for the next run.
+    let mut run_max: Option<DateTime<Utc>> = None;
     let mut seen: HashSet<String> = HashSet::new();
 
     loop {
@@ -480,7 +481,7 @@ where
                 crossed = true;
                 break;
             }
-            run_min = Some(run_min.map_or(m.pr.updated_at, |c| c.min(m.pr.updated_at)));
+            run_max = Some(run_max.map_or(m.pr.updated_at, |c| c.max(m.pr.updated_at)));
             if full {
                 seen.insert(m.pr.node_id.clone());
             }
@@ -542,7 +543,11 @@ where
         cursor = page_info.end_cursor;
     }
 
-    sync_state::complete(conn, ENTITY, run_min.or(watermark))?;
+    // Never regress: a resumed run only re-walked the pages after its checkpoint,
+    // so its `run_max` is older than what the interrupted first attempt already
+    // synced. Keeping the larger value costs at most a re-walk, never a skip.
+    // `None` sorts below `Some`, so this also handles either side being unset.
+    sync_state::complete(conn, ENTITY, run_max.max(watermark))?;
 
     if full && started_fresh {
         mark_deleted_except(conn, &seen)?;

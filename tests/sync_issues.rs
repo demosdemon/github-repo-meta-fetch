@@ -108,7 +108,73 @@ async fn paginates_three_pages() {
         s.updated_watermark
             .unwrap()
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        "2026-01-01T00:00:00Z"
+        "2026-03-01T00:00:00Z"
+    );
+}
+
+/// The watermark is the early-stop floor for the *next* run, so a completed
+/// pass must stamp the newest `updatedAt` it saw. Stamping the oldest makes the
+/// floor a no-op: every item still satisfies `updated_at >= watermark`, so the
+/// following run re-walks the whole repo and rewrites the same value forever.
+#[tokio::test]
+async fn completed_run_stamps_newest_updated_at_and_next_run_early_stops() {
+    let server = MockServer::start().await;
+
+    // Pages descend by updatedAt: 2026-03-01, 2026-02-01, 2026-01-01.
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .and(body_string_contains("\"cursor\":\"C2\""))
+        .respond_with(rl_headers(ResponseTemplate::new(200).set_body_string(
+            page(&issue_node(1, "2026-01-01T00:00:00Z"), false, ""),
+        )))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .and(body_string_contains("\"cursor\":\"C1\""))
+        .respond_with(rl_headers(ResponseTemplate::new(200).set_body_string(
+            page(&issue_node(2, "2026-02-01T00:00:00Z"), true, "C2"),
+        )))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(rl_headers(ResponseTemplate::new(200).set_body_string(
+            page(&issue_node(3, "2026-03-01T00:00:00Z"), true, "C1"),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server);
+    let conn = store::open_in_memory().unwrap();
+    store::repo_meta::ensure(&conn, "o", "r").unwrap();
+
+    sync::issues::sync_issues(&client, &conn, "o", "r", false, |_h| true)
+        .await
+        .unwrap();
+
+    let s = store::sync_state::get(&conn, "issues").unwrap();
+    assert_eq!(
+        s.updated_watermark
+            .unwrap()
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "2026-03-01T00:00:00Z",
+        "watermark must be the newest synced item, not the oldest"
+    );
+
+    // A second incremental run must early-stop instead of re-walking all three
+    // pages. The floor is strict (`updated_at < watermark`), so page 1's item —
+    // sitting exactly at the watermark — is re-synced, and the crossing is only
+    // detected one page in: two requests, not the full three.
+    let before = server.received_requests().await.unwrap().len();
+    sync::issues::sync_issues(&client, &conn, "o", "r", false, |_h| true)
+        .await
+        .unwrap();
+    let after = server.received_requests().await.unwrap().len();
+    assert_eq!(
+        after - before,
+        2,
+        "second run must early-stop on the watermark, not re-walk every page"
     );
 }
 
