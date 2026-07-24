@@ -232,8 +232,8 @@ fn write_claude_md(out: &Path, owner: &str, repo: &str, width: usize) -> std::io
 
 /// Project the repo DB into a Markdown tree rooted at `out`. Non-deleted issues
 /// only. Deleted issues whose files exist are removed. Writes README,
-/// labels.md, milestones.md, issues/, prs/, and cross-cutting
-/// by-label/by-milestone/by-state index tables.
+/// CLAUDE.md, labels.md, milestones.md, hierarchy.md, issues/, prs/, and
+/// cross-cutting by-label/by-milestone/by-state index tables.
 ///
 /// # Errors
 ///

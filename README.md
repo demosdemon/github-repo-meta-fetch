@@ -38,6 +38,7 @@ meta-fetch status octocat/hello-world       # watermarks, phases, entity counts
 ```text
 hello-world-meta/
 ├── README.md          # entity counts + sync watermarks
+├── CLAUDE.md          # schema guide: how to read and walk this tree
 ├── labels.md          # every label: color, description, usage count
 ├── milestones.md      # every milestone: state, due date, open/closed counts
 ├── hierarchy.md       # parent/sub-issue tree
@@ -52,6 +53,8 @@ hello-world-meta/
     ├── by-milestone/
     └── by-state/      # open.md, draft.md, closed.md, merged.md
 ```
+
+`CLAUDE.md` makes the tree self-describing: it documents the frontmatter schemas, the index table shapes, the filename and slug rules, and the traps worth knowing — most importantly that issues, pull requests, and GitHub Discussions share one number sequence, so a missing `issues/0037.md` can mean `#37` is a pull request, a discussion (which this tool never syncs), or genuinely deleted, not automatically a deleted issue. Tests assert every documented fact still matches what the renderer emits. A `CLAUDE.md` that meta-fetch did not generate is never overwritten.
 
 Each issue file carries queryable YAML frontmatter — state, labels, assignees, milestone, timestamps, and relationship edges (parent, sub-issues, blocked-by, blocking, cross-referenced items) — followed by the body and the full comment thread:
 
@@ -112,7 +115,7 @@ LGTM
 ### Determinism
 
 - Re-rendering from an unchanged cache reproduces the tree **byte for byte** (asserted by an integration test).
-- Filenames are zero-padded to a width that only ever grows — 4 digits from the first render, 5 once the repo passes 9,999 issues, and so on — so committed links never get renamed as the repo grows.
+- Filenames are zero-padded to a width that never shrinks — 4 digits from the first render, 5 once the repo passes 9,999 issues, and so on. Removing the highest-numbered item never renumbers anything, but a number gaining a digit renames every file in the tree at once.
 - Index directories are fully derived: wiped and rebuilt on every render. Files for deleted items are pruned.
 
 ## Incremental sync

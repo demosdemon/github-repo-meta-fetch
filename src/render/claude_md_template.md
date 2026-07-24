@@ -36,8 +36,9 @@ thread. PR files add reviews and review threads with their diff hunks.
 ## Filenames and index slugs
 
 Entity filenames are the issue or PR number zero-padded to {{WIDTH}} digits —
-issue 42 is `issues/{{EXAMPLE}}.md`. The width only ever grows, so committed
-links are never renamed as the repository grows.
+issue 42 is `issues/{{EXAMPLE}}.md`. The width never shrinks, so removing the
+highest-numbered item never renumbers files. It does grow when a number gains
+a digit — and when it does, every file is renamed at once.
 
 Index filenames are slugs: every character outside `[A-Za-z0-9._-]` becomes
 `-`. The label `area: sync` indexes as `by-label/area--sync.md`.
@@ -135,7 +136,8 @@ they never disagree with the entity files.
 
 ## `hierarchy.md`
 
-The repository-wide parent/sub-issue tree, as nested bullets:
+The repository-wide parent/sub-issue tree, as nested bullets (shown at pad
+width 4 below regardless of this repository's actual width):
 
 ```markdown
 - [#2 Epic](issues/0002.md) (open)
@@ -159,11 +161,12 @@ they have no file here.
   glob matters: it skips the index tables, which would otherwise return a hit
   for every item whose title matches.
 
-**Lookup by number needs both directories.** Issues and pull requests share
-one number sequence per repository, so `#37` is either an issue or a PR, never
-both — and nothing about the number says which. Check `issues/NNNN.md` *and*
-`prs/NNNN.md`. This applies to a bare number a user gives you and to every
-number appearing in `related` or `closes`.
+**Lookup by number needs both directories.** Issues, pull requests, and GitHub
+Discussions share one number sequence per repository, so `#37` is an issue, a
+PR, or a discussion — only the first two have files here, and nothing about
+the number alone says which. Check `issues/NNNN.md` *and* `prs/NNNN.md`. This
+applies to a bare number a user gives you and to every number appearing in
+`related` or `closes`.
 
 ## Before you answer
 
@@ -172,7 +175,8 @@ number appearing in `related` or `closes`.
   at …". Data newer than the watermark is simply not here.
 - **A missing `issues/NNNN.md` usually means `#NNNN` is a pull request.**
   Check `prs/NNNN.md` before concluding anything. Only when a number is absent
-  from *both* directories is the item deleted, transferred, or not yet synced.
+  from *both* directories is it a discussion (which this tool never syncs),
+  deleted, transferred, or not yet synced.
 - **Issue state is not PR state.** Issues are `open` or `closed`, refined by
   `state_reason`. Pull requests are `open`, `draft`, `closed`, or `merged` —
   and a merged PR is never `closed`.

@@ -130,6 +130,11 @@ fn rendering_twice_is_byte_identical() {
         fa.contains_key("hierarchy.md"),
         "hierarchy.md must be rendered"
     );
+    assert!(fa.contains_key("CLAUDE.md"), "CLAUDE.md must be rendered");
+    assert!(
+        fa["CLAUDE.md"].contains("o/r"),
+        "CLAUDE.md must name the repository it projects"
+    );
     assert!(
         fa["issues/0001.md"].contains("blocked: 1"),
         "relationship keys must appear in frontmatter"
