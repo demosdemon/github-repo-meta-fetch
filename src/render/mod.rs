@@ -1,3 +1,4 @@
+pub mod claude_md;
 pub mod frontmatter;
 pub mod hierarchy;
 pub mod indexes;
