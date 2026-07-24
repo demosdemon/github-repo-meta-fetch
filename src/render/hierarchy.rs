@@ -7,7 +7,9 @@ use crate::model::cmp_siblings;
 use crate::store::relationships::ParentEdge;
 
 /// Repo-wide traversal depth cap, matching GitHub's sub-issue nesting limit.
-const MAX_DEPTH: usize = 8;
+///
+/// `pub(super)` so `claude_md` can assert the documented cap matches this.
+pub(super) const MAX_DEPTH: usize = 8;
 
 /// Escape characters that would break Markdown link text (`[title](target)`).
 fn escape_link_text(s: &str) -> String {

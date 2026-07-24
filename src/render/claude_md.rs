@@ -45,6 +45,9 @@ mod tests {
     use crate::model::PullRequest;
     use crate::model::Relationships;
     use crate::render::frontmatter;
+    use crate::render::hierarchy;
+    use crate::render::index_slug;
+    use crate::render::indexes;
     use crate::render::pr;
 
     /// Leading `key:` names from top-level lines. Blank lines, comment lines,
@@ -205,6 +208,59 @@ mod tests {
         assert!(
             wide.contains("000042.md"),
             "example filename must follow the pad width"
+        );
+    }
+
+    #[test]
+    fn documented_headers_match_render() {
+        let doc = render("octocat", "hello-world", 4);
+        let cases = [
+            (
+                "| # | title | state | assignees | updated |",
+                indexes::issue_table(&[]),
+            ),
+            (
+                "| name | color | count | description |",
+                indexes::labels_doc(&[]),
+            ),
+            (
+                "| # | title | state | due | open | closed |",
+                indexes::milestones_doc(&[]),
+            ),
+        ];
+        for (header, rendered) in cases {
+            assert!(
+                doc.contains(header),
+                "CLAUDE.md is missing header: {header}"
+            );
+            assert!(
+                rendered.contains(header),
+                "renderer no longer emits the header CLAUDE.md documents: {header}"
+            );
+        }
+    }
+
+    #[test]
+    fn documented_depth_cap_matches_const() {
+        let doc = render("octocat", "hello-world", 4);
+        let phrase = format!("{} levels", hierarchy::MAX_DEPTH);
+        assert!(
+            doc.contains(&phrase),
+            "CLAUDE.md must state the nesting cap as `{phrase}`"
+        );
+    }
+
+    #[test]
+    fn documented_slug_example_matches_render() {
+        let doc = render("octocat", "hello-world", 4);
+        assert!(
+            doc.contains("by-label/area--sync.md"),
+            "CLAUDE.md must carry the worked slug example"
+        );
+        assert_eq!(
+            index_slug("area: sync"),
+            "area--sync",
+            "the slug rule changed; the worked example in CLAUDE.md is now wrong"
         );
     }
 }

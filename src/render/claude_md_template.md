@@ -7,10 +7,21 @@ issues and pull requests of `{{OWNER_REPO}}`, projected into Markdown by
 [github-repo-meta-fetch][gh] so an agent can read them without a network call,
 an API token, or a rate limit.
 
-Entity filenames are zero-padded to {{WIDTH}} digits — issue 42 is
-`issues/{{EXAMPLE}}.md`.
-
 [gh]: https://github.com/demosdemon/github-repo-meta-fetch
+
+## Filenames and index slugs
+
+Entity filenames are the issue or PR number zero-padded to {{WIDTH}} digits —
+issue 42 is `issues/{{EXAMPLE}}.md`. The width only ever grows, so committed
+links are never renamed as the repository grows.
+
+Index filenames are slugs: every character outside `[A-Za-z0-9._-]` becomes
+`-`. The label `area: sync` indexes as `by-label/area--sync.md`.
+
+Two distinct names can collide on one slug (`a b` and `a-b` both yield
+`a-b.md`), in which case the last one written wins and the other has no index
+file. So an absent `by-label/` file is not proof that a label is unused —
+check `labels.md`, which lists every label with its usage count.
 
 ## Issue frontmatter
 
@@ -78,3 +89,35 @@ url: "https://github.com/{{OWNER_REPO}}/pull/108"
 
 `state` here is an **effective** state that folds in `draft` and `merged`; it
 is not the raw GitHub state. A merged PR is `merged`, never `closed`.
+
+## Index tables
+
+Every file under `by-label/`, `by-milestone/`, and `by-state/` is a single
+table, sorted by number ascending, whose first cell links to the entity file:
+
+```markdown
+| # | title | state | assignees | updated |
+```
+
+`labels.md` and `milestones.md` are repository-wide taxonomy tables:
+
+```markdown
+| name | color | count | description |
+| # | title | state | due | open | closed |
+```
+
+These directories are fully derived — wiped and rebuilt on every render — so
+they never disagree with the entity files.
+
+## `hierarchy.md`
+
+The repository-wide parent/sub-issue tree, as nested bullets:
+
+```markdown
+- [#2 Epic](issues/0002.md) (open)
+  - [#3 Sub-task](issues/0003.md) (open)
+```
+
+Traversal is capped at 8 levels, matching GitHub's sub-issue nesting limit.
+Sub-issues in other repositories appear as plain text marked `— external`;
+they have no file here.
