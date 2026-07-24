@@ -22,4 +22,5 @@ target/
 
 # insta pending snapshots
 **/*.pending-snap
+**/*.snap.new
 

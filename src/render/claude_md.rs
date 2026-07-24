@@ -225,8 +225,12 @@ mod tests {
                 doc.contains(header),
                 "CLAUDE.md is missing header: {header}"
             );
+            // Anchor to the header row's trailing newline, not just a
+            // substring match — otherwise a column silently appended to the
+            // rendered header (e.g. an extra `| new |` on the end) would
+            // still contain the documented prefix and pass vacuously.
             assert!(
-                rendered.contains(header),
+                rendered.contains(&format!("{header}\n")),
                 "renderer no longer emits the header CLAUDE.md documents: {header}"
             );
         }
