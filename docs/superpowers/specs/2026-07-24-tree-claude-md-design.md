@@ -1,6 +1,6 @@
 # Self-describing Markdown tree: rendering `CLAUDE.md`
 
-**Status:** approved, not yet implemented
+**Status:** implemented (`56acaa3`..`616cd3d`)
 **Date:** 2026-07-24
 
 ## Problem
