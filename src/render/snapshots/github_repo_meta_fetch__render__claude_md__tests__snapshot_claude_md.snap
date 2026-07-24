@@ -1,9 +1,13 @@
+---
+source: src/render/claude_md.rs
+expression: "render(\"octocat\", \"hello-world\", 4)"
+---
 <!-- meta-fetch:generated — rewritten on every render; edits will be lost. -->
 
-# {{OWNER_REPO}} — offline issue and pull request projection
+# octocat/hello-world — offline issue and pull request projection
 
 This directory is **generated, derived data**. It is a snapshot of the GitHub
-issues and pull requests of `{{OWNER_REPO}}`, projected into Markdown by
+issues and pull requests of `octocat/hello-world`, projected into Markdown by
 [github-repo-meta-fetch][gh] so an agent can read them without a network call,
 an API token, or a rate limit.
 
@@ -35,8 +39,8 @@ thread. PR files add reviews and review threads with their diff hunks.
 
 ## Filenames and index slugs
 
-Entity filenames are the issue or PR number zero-padded to {{WIDTH}} digits —
-issue 42 is `issues/{{EXAMPLE}}.md`. The width only ever grows, so committed
+Entity filenames are the issue or PR number zero-padded to 4 digits —
+issue 42 is `issues/0042.md`. The width only ever grows, so committed
 links are never renamed as the repository grows.
 
 Index filenames are slugs: every character outside `[A-Za-z0-9._-]` becomes
@@ -69,7 +73,7 @@ sub_issues: ["#7", "#9"]
 blocked: 1
 blocked_by: ["#3"]
 blocking: ["#8", "acme/infra#4"]
-url: "https://github.com/{{OWNER_REPO}}/issues/42"
+url: "https://github.com/octocat/hello-world/issues/42"
 ```
 
 Two shapes are easy to confuse:
@@ -108,7 +112,7 @@ assignees: []
 milestone: null
 closes: [37]                      # issues this PR closes, bare numbers
 related: [12]
-url: "https://github.com/{{OWNER_REPO}}/pull/108"
+url: "https://github.com/octocat/hello-world/pull/108"
 ```
 
 `state` here is an **effective** state that folds in `draft` and `merged`; it

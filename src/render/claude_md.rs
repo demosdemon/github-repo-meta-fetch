@@ -263,4 +263,9 @@ mod tests {
             "the slug rule changed; the worked example in CLAUDE.md is now wrong"
         );
     }
+
+    #[test]
+    fn snapshot_claude_md() {
+        insta::assert_snapshot!(render("octocat", "hello-world", 4));
+    }
 }
