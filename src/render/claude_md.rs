@@ -13,14 +13,6 @@
 /// file a human wrote. Changing it strands every previously rendered tree as
 /// unrecognisable, permanently skipped and warned about. The prose *after* the
 /// sentinel on that line is free to be reworded; this prefix is not.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "consumed by render_tree once a later task wires the CLAUDE.md write into \
-                  the pipeline; the test build already reads it via the tests below"
-    )
-)]
 pub(super) const SENTINEL: &str = "<!-- meta-fetch:generated";
 
 const TEMPLATE: &str = include_str!("claude_md_template.md");
