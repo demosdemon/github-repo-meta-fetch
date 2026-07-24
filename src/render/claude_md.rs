@@ -40,6 +40,141 @@ pub fn render(owner: &str, repo: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Issue;
+    use crate::model::IssueState;
+    use crate::model::PullRequest;
+    use crate::model::Relationships;
+    use crate::render::frontmatter;
+    use crate::render::pr;
+
+    /// Leading `key:` names from top-level lines. Blank lines, comment lines,
+    /// and indented continuations are ignored, so annotations in the template
+    /// do not read as keys.
+    fn key_names(block: &str) -> Vec<String> {
+        block
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .filter(|l| !l.starts_with(char::is_whitespace))
+            .filter_map(|l| l.split_once(':').map(|(k, _)| k.trim().to_string()))
+            .collect()
+    }
+
+    /// Key names from the fenced `yaml` block under the given `##` heading.
+    fn documented_keys(doc: &str, heading: &str) -> Vec<String> {
+        let after = doc
+            .split_once(heading)
+            .unwrap_or_else(|| panic!("heading not found in CLAUDE.md: {heading}"))
+            .1;
+        let block = after
+            .split_once("```yaml\n")
+            .unwrap_or_else(|| panic!("no yaml block under heading: {heading}"))
+            .1
+            .split_once("\n```")
+            .unwrap_or_else(|| panic!("unterminated yaml block under: {heading}"))
+            .0;
+        key_names(block)
+    }
+
+    /// Key names from a rendered `---`-delimited frontmatter block.
+    fn emitted_keys(rendered: &str) -> Vec<String> {
+        let body = rendered
+            .strip_prefix("---\n")
+            .expect("frontmatter must open with ---")
+            .split_once("\n---")
+            .expect("frontmatter must close with ---")
+            .0;
+        key_names(body)
+    }
+
+    fn dt(s: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(s)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    fn issue_fixture() -> Issue {
+        Issue {
+            node_id: "I_1".into(),
+            number: 42,
+            title: "Bug".into(),
+            state: IssueState::Open,
+            state_reason: None,
+            author: Some("octocat".into()),
+            body: "body".into(),
+            created_at: dt("2026-01-01T00:00:00Z"),
+            updated_at: dt("2026-01-02T00:00:00Z"),
+            closed_at: None,
+            milestone: None,
+            labels: vec![],
+            assignees: vec![],
+            deleted: false,
+        }
+    }
+
+    fn pr_fixture() -> PullRequest {
+        PullRequest {
+            node_id: "PR_1".into(),
+            number: 108,
+            title: "Fix".into(),
+            state: "OPEN".into(),
+            is_draft: false,
+            merged: false,
+            merged_at: None,
+            merged_by: None,
+            base_ref: "main".into(),
+            head_ref: "feature".into(),
+            additions: 10,
+            deletions: 2,
+            changed_files: 3,
+            author: Some("octocat".into()),
+            body: "body".into(),
+            created_at: dt("2026-01-01T00:00:00Z"),
+            updated_at: dt("2026-01-02T00:00:00Z"),
+            closed_at: None,
+            milestone: None,
+            labels: vec![],
+            assignees: vec![],
+            deleted: false,
+        }
+    }
+
+    #[test]
+    fn documented_issue_frontmatter_matches_render() {
+        let doc = render("octocat", "hello-world", 4);
+        let emitted = frontmatter::render(
+            &issue_fixture(),
+            &[],
+            &Relationships::default(),
+            "https://github.com/octocat/hello-world/issues/42",
+        );
+        assert_eq!(
+            documented_keys(&doc, "## Issue frontmatter"),
+            emitted_keys(&emitted),
+            "CLAUDE.md documents different issue frontmatter keys than \
+             frontmatter::render emits — update the template"
+        );
+    }
+
+    #[test]
+    fn documented_pr_frontmatter_matches_render() {
+        let doc = render("octocat", "hello-world", 4);
+        let emitted = pr::render(
+            &pr_fixture(),
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            "https://github.com/octocat/hello-world/pull/108",
+        );
+        assert_eq!(
+            documented_keys(&doc, "## Pull request frontmatter"),
+            emitted_keys(&emitted),
+            "CLAUDE.md documents different PR frontmatter keys than \
+             pr::render emits — update the template"
+        );
+    }
 
     #[test]
     fn render_leaves_no_placeholders() {
