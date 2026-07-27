@@ -32,6 +32,31 @@ fn page(node: &str, has_next: bool, end: &str) -> String {
         r#"{{"data":{{"repository":{{"issues":{{"pageInfo":{{"hasNextPage":{has_next},"endCursor":{cursor}}},"nodes":[{node}]}}}}}}}}"#
     )
 }
+/// A `WalkCtx` pinned to a fixed instant, for tests that call a phase
+/// function directly.
+fn walk_ctx<'a>(
+    client: &'a GithubClient,
+    conn: &'a rusqlite::Connection,
+    clock: &'a github_repo_meta_fetch::clock::FixedClock,
+) -> sync::WalkCtx<'a> {
+    sync::WalkCtx {
+        client,
+        conn,
+        owner: "o",
+        repo: "r",
+        clock,
+    }
+}
+
+/// The instant every direct-call test pins its clock to.
+fn test_clock() -> github_repo_meta_fetch::clock::FixedClock {
+    github_repo_meta_fetch::clock::FixedClock(
+        chrono::DateTime::parse_from_rfc3339("2026-07-20T09:31:52Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc),
+    )
+}
+
 fn rl_headers(t: ResponseTemplate) -> ResponseTemplate {
     t.insert_header("x-ratelimit-resource", "graphql")
         .insert_header("x-ratelimit-limit", "5000")
@@ -94,7 +119,10 @@ async fn paginates_three_pages() {
     let conn = store::open_in_memory().unwrap();
     store::repo_meta::ensure(&conn, "o", "r").unwrap();
 
-    let stop = sync::issues::sync_issues(&client, &conn, "o", "r", false, |_h| true)
+    let clk = test_clock();
+    let ctx = walk_ctx(&client, &conn, &clk);
+    let mut seen = std::collections::HashSet::new();
+    let stop = sync::issues::sync_issues(&ctx, false, &mut seen, |_h| true)
         .await
         .unwrap();
     assert!(matches!(stop, sync::issues::SyncStop::Completed));
@@ -148,8 +176,11 @@ async fn completed_run_stamps_newest_updated_at_and_next_run_early_stops() {
     let client = client_for(&server);
     let conn = store::open_in_memory().unwrap();
     store::repo_meta::ensure(&conn, "o", "r").unwrap();
+    let clk = test_clock();
+    let ctx = walk_ctx(&client, &conn, &clk);
 
-    sync::issues::sync_issues(&client, &conn, "o", "r", false, |_h| true)
+    let mut seen = std::collections::HashSet::new();
+    sync::issues::sync_issues(&ctx, false, &mut seen, |_h| true)
         .await
         .unwrap();
 
@@ -167,7 +198,8 @@ async fn completed_run_stamps_newest_updated_at_and_next_run_early_stops() {
     // sitting exactly at the watermark — is re-synced, and the crossing is only
     // detected one page in: two requests, not the full three.
     let before = server.received_requests().await.unwrap().len();
-    sync::issues::sync_issues(&client, &conn, "o", "r", false, |_h| true)
+    let mut seen = std::collections::HashSet::new();
+    sync::issues::sync_issues(&ctx, false, &mut seen, |_h| true)
         .await
         .unwrap();
     let after = server.received_requests().await.unwrap().len();
@@ -241,12 +273,15 @@ async fn checkpoint_then_resume_matches_uninterrupted() {
     let client_a = client_for(&server_a);
     let conn_a = store::open_in_memory().unwrap();
     store::repo_meta::ensure(&conn_a, "o", "r").unwrap();
+    let clk_a = test_clock();
+    let ctx_a = walk_ctx(&client_a, &conn_a, &clk_a);
 
     // budget_ok returns false after the FIRST page so the run pauses with a
     // checkpoint at cursor "C1".
     // `budget_ok` is invoked between pages; returning false on the first such
     // check pauses the run after page 1 (checkpoint saved at cursor "C1").
-    let stop = sync::issues::sync_issues(&client_a, &conn_a, "o", "r", false, |_h| false)
+    let mut seen = std::collections::HashSet::new();
+    let stop = sync::issues::sync_issues(&ctx_a, false, &mut seen, |_h| false)
         .await
         .unwrap();
     assert!(matches!(stop, SyncStop::Paused));
@@ -260,7 +295,8 @@ async fn checkpoint_then_resume_matches_uninterrupted() {
     assert_eq!(n_after_pause, 1);
 
     // Resume from the saved checkpoint cursor; this re-requests pages 2 and 3.
-    let stop = sync::issues::sync_issues(&client_a, &conn_a, "o", "r", false, |_h| true)
+    let mut seen = std::collections::HashSet::new();
+    let stop = sync::issues::sync_issues(&ctx_a, false, &mut seen, |_h| true)
         .await
         .unwrap();
     assert!(matches!(stop, SyncStop::Completed));
@@ -271,7 +307,10 @@ async fn checkpoint_then_resume_matches_uninterrupted() {
     let client_b = client_for(&server_b);
     let conn_b = store::open_in_memory().unwrap();
     store::repo_meta::ensure(&conn_b, "o", "r").unwrap();
-    let stop = sync::issues::sync_issues(&client_b, &conn_b, "o", "r", false, |_h| true)
+    let clk_b = test_clock();
+    let ctx_b = walk_ctx(&client_b, &conn_b, &clk_b);
+    let mut seen = std::collections::HashSet::new();
+    let stop = sync::issues::sync_issues(&ctx_b, false, &mut seen, |_h| true)
         .await
         .unwrap();
     assert!(matches!(stop, SyncStop::Completed));
@@ -321,10 +360,12 @@ async fn syncer_pauses_on_low_budget_no_wait() {
     let conn = store::open_in_memory().unwrap();
     store::repo_meta::ensure(&conn, "o", "r").unwrap();
     let mut rl = RateLimitStore::open_in_memory("fp").unwrap();
+    let clk = test_clock();
     let mut syncer = Syncer {
         client: &client,
         conn: &conn,
         rl: &mut rl,
+        clock: &clk,
         reserve: Reserve::Percent(0.10),
         cost_ceiling: Some(30),
         no_wait: true,
@@ -405,10 +446,12 @@ async fn syncer_pause_is_driven_by_estimator_used_delta() {
     let conn = store::open_in_memory().unwrap();
     store::repo_meta::ensure(&conn, "o", "r").unwrap();
     let mut rl = RateLimitStore::open_in_memory("fp").unwrap();
+    let clk = test_clock();
     let mut syncer = Syncer {
         client: &client,
         conn: &conn,
         rl: &mut rl,
+        clock: &clk,
         reserve: Reserve::Percent(0.10),
         cost_ceiling: None,
         no_wait: true,
@@ -474,7 +517,10 @@ async fn full_reconcile_marks_missing_issue_deleted() {
     let client = GithubClient::new(octo);
 
     // FULL run, fresh (no resume cursor), completes uninterrupted.
-    let stop = sync::issues::sync_issues(&client, &conn, "o", "r", true, |_h| true)
+    let clk = test_clock();
+    let ctx = walk_ctx(&client, &conn, &clk);
+    let mut seen = std::collections::HashSet::new();
+    let stop = sync::issues::sync_issues(&ctx, true, &mut seen, |_h| true)
         .await
         .unwrap();
     assert!(matches!(stop, SyncStop::Completed));

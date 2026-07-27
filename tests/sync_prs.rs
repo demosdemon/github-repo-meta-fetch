@@ -59,6 +59,31 @@ fn comment_rows(conn: &rusqlite::Connection) -> Vec<(String, String)> {
         .collect()
 }
 
+/// A `WalkCtx` pinned to a fixed instant, for tests that call a phase
+/// function directly.
+fn walk_ctx<'a>(
+    client: &'a GithubClient,
+    conn: &'a rusqlite::Connection,
+    clock: &'a github_repo_meta_fetch::clock::FixedClock,
+) -> sync::WalkCtx<'a> {
+    sync::WalkCtx {
+        client,
+        conn,
+        owner: "o",
+        repo: "r",
+        clock,
+    }
+}
+
+/// The instant every direct-call test pins its clock to.
+fn test_clock() -> github_repo_meta_fetch::clock::FixedClock {
+    github_repo_meta_fetch::clock::FixedClock(
+        chrono::DateTime::parse_from_rfc3339("2026-07-20T09:31:52Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc),
+    )
+}
+
 fn rl(t: ResponseTemplate) -> ResponseTemplate {
     t.insert_header("x-ratelimit-resource", "graphql")
         .insert_header("x-ratelimit-limit", "5000")
@@ -140,7 +165,10 @@ async fn paginates_prs_three_pages() {
     let conn = store::open_in_memory().unwrap();
     store::repo_meta::ensure(&conn, "o", "r").unwrap();
 
-    let stop = sync::prs::sync_prs(&client, &conn, "o", "r", false, |_h| true)
+    let clk = test_clock();
+    let ctx = walk_ctx(&client, &conn, &clk);
+    let mut seen = std::collections::HashSet::new();
+    let stop = sync::prs::sync_prs(&ctx, false, &mut seen, |_h| true)
         .await
         .unwrap();
     assert!(matches!(stop, sync::issues::SyncStop::Completed));
@@ -173,8 +201,11 @@ async fn pauses_per_pr_when_budget_low() {
     let conn = store::open_in_memory().unwrap();
     store::repo_meta::ensure(&conn, "o", "r").unwrap();
 
+    let clk = test_clock();
+    let ctx = walk_ctx(&client, &conn, &clk);
+    let mut seen = std::collections::HashSet::new();
     let mut checks = 0;
-    let stop = sync::prs::sync_prs(&client, &conn, "o", "r", false, |_h| {
+    let stop = sync::prs::sync_prs(&ctx, false, &mut seen, |_h| {
         checks += 1;
         checks > 1 // true once we've passed the first PR; false on the first
         // check → pause after PR #1
@@ -236,10 +267,12 @@ async fn only_issues_skips_pr_queries() {
     let conn = store::open_in_memory().unwrap();
     store::repo_meta::ensure(&conn, "o", "r").unwrap();
     let mut rl_store = RateLimitStore::open_in_memory("fp").unwrap();
+    let clk = test_clock();
     let mut syncer = sync::Syncer {
         client: &client,
         conn: &conn,
         rl: &mut rl_store,
+        clock: &clk,
         reserve: Reserve::default(),
         cost_ceiling: None,
         no_wait: true,
@@ -278,7 +311,10 @@ async fn pr_comment_drain_persists_second_page() {
     let client = client_for(&server);
     let conn = store::open_in_memory().unwrap();
     store::repo_meta::ensure(&conn, "o", "r").unwrap();
-    sync::prs::sync_prs(&client, &conn, "o", "r", false, |_h| true)
+    let clk = test_clock();
+    let ctx = walk_ctx(&client, &conn, &clk);
+    let mut seen = std::collections::HashSet::new();
+    sync::prs::sync_prs(&ctx, false, &mut seen, |_h| true)
         .await
         .unwrap();
     let n: i64 = conn
@@ -328,12 +364,15 @@ async fn resume_matches_uninterrupted_prs() {
     let client_a = client_for(&server_a);
     let conn_a = store::open_in_memory().unwrap();
     store::repo_meta::ensure(&conn_a, "o", "r").unwrap();
+    let clk_a = test_clock();
+    let ctx_a = walk_ctx(&client_a, &conn_a, &clk_a);
 
     // budget_ok returns false after the FIRST PR (per-PR gate).
     // The closure is called once per PR; returning false on the first call
     // pauses after PR #2 (first page, first PR) without advancing the cursor.
     let mut call_count = 0usize;
-    let stop = sync::prs::sync_prs(&client_a, &conn_a, "o", "r", false, |_h| {
+    let mut seen = std::collections::HashSet::new();
+    let stop = sync::prs::sync_prs(&ctx_a, false, &mut seen, |_h| {
         call_count += 1;
         call_count > 1
     })
@@ -356,7 +395,8 @@ async fn resume_matches_uninterrupted_prs() {
     );
 
     // Resume to completion (budget always ok).
-    let stop = sync::prs::sync_prs(&client_a, &conn_a, "o", "r", false, |_h| true)
+    let mut seen = std::collections::HashSet::new();
+    let stop = sync::prs::sync_prs(&ctx_a, false, &mut seen, |_h| true)
         .await
         .unwrap();
     assert!(matches!(stop, SyncStop::Completed));
@@ -367,7 +407,10 @@ async fn resume_matches_uninterrupted_prs() {
     let client_b = client_for(&server_b);
     let conn_b = store::open_in_memory().unwrap();
     store::repo_meta::ensure(&conn_b, "o", "r").unwrap();
-    let stop = sync::prs::sync_prs(&client_b, &conn_b, "o", "r", false, |_h| true)
+    let clk_b = test_clock();
+    let ctx_b = walk_ctx(&client_b, &conn_b, &clk_b);
+    let mut seen = std::collections::HashSet::new();
+    let stop = sync::prs::sync_prs(&ctx_b, false, &mut seen, |_h| true)
         .await
         .unwrap();
     assert!(matches!(stop, SyncStop::Completed));

@@ -7,7 +7,6 @@ use std::collections::HashSet;
 use chrono::DateTime;
 use chrono::Utc;
 use graphql_client::GraphQLQuery as _;
-use rusqlite::Connection;
 
 use crate::github::gql::PrsPage;
 use crate::github::gql::ReviewThreadsPage;
@@ -31,6 +30,7 @@ use crate::store::prs::replace_reviews;
 use crate::store::prs::upsert_pull_request;
 use crate::store::sync_state;
 use crate::store::sync_state::RunPhase;
+use crate::sync::WalkCtx;
 use crate::sync::issues::SyncStop;
 use crate::sync::next_cursor;
 
@@ -430,24 +430,34 @@ async fn drain_review_threads(
 ///
 /// Returns an error on GraphQL transport/decoding failure, a missing
 /// `repository`, or any persistence failure.
+// `seen` takes a concrete `HashSet<String>` (never a caller-supplied hasher):
+// this is an internal accumulator, not a public collection API.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "seen is a private scratch accumulator built and consumed entirely within sync; \
+              generalizing over BuildHasher adds a type parameter with no caller"
+)]
 pub async fn sync_prs<F>(
-    client: &crate::github::GithubClient,
-    conn: &Connection,
-    owner: &str,
-    repo: &str,
+    ctx: &WalkCtx<'_>,
     full: bool,
+    seen: &mut HashSet<String>,
     mut budget_ok: F,
 ) -> anyhow::Result<SyncStop>
 where
     F: FnMut(&http::HeaderMap) -> bool,
 {
+    // Rebind the walk's per-run invariants once so the body below (shared with
+    // sync_issues) is untouched by the WalkCtx introduction.
+    let client = ctx.client;
+    let conn = ctx.conn;
+    let owner = ctx.owner;
+    let repo = ctx.repo;
     let state = sync_state::get(conn, ENTITY)?;
     let watermark = state.updated_watermark;
     let started_fresh = state.resume_cursor.is_none();
     let mut cursor = state.resume_cursor;
     // Highest `updatedAt` seen this pass: the early-stop floor for the next run.
     let mut run_max: Option<DateTime<Utc>> = None;
-    let mut seen: HashSet<String> = HashSet::new();
 
     loop {
         let body = PrsPage::build_query(prs_page::Variables {
@@ -550,7 +560,7 @@ where
     sync_state::complete(conn, ENTITY, run_max.max(watermark))?;
 
     if full && started_fresh {
-        mark_deleted_except(conn, &seen)?;
+        mark_deleted_except(conn, seen)?;
     }
 
     Ok(SyncStop::Completed)

@@ -10,6 +10,31 @@ use wiremock::matchers::body_string_contains;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
+/// A `WalkCtx` pinned to a fixed instant, for tests that call a phase
+/// function directly.
+fn walk_ctx<'a>(
+    client: &'a GithubClient,
+    conn: &'a rusqlite::Connection,
+    clock: &'a github_repo_meta_fetch::clock::FixedClock,
+) -> sync::WalkCtx<'a> {
+    sync::WalkCtx {
+        client,
+        conn,
+        owner: "o",
+        repo: "r",
+        clock,
+    }
+}
+
+/// The instant every direct-call test pins its clock to.
+fn test_clock() -> github_repo_meta_fetch::clock::FixedClock {
+    github_repo_meta_fetch::clock::FixedClock(
+        chrono::DateTime::parse_from_rfc3339("2026-07-20T09:31:52Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc),
+    )
+}
+
 fn rl(t: ResponseTemplate) -> ResponseTemplate {
     t.insert_header("x-ratelimit-resource", "graphql")
         .insert_header("x-ratelimit-limit", "5000")
@@ -86,10 +111,14 @@ async fn run_once() -> tempfile::TempDir {
     sync::taxonomy::sync_milestones(&client, &conn, "o", "r")
         .await
         .unwrap();
-    sync::issues::sync_issues(&client, &conn, "o", "r", false, |_h| true)
+    let clk = test_clock();
+    let ctx = walk_ctx(&client, &conn, &clk);
+    let mut seen = std::collections::HashSet::new();
+    sync::issues::sync_issues(&ctx, false, &mut seen, |_h| true)
         .await
         .unwrap();
-    sync::prs::sync_prs(&client, &conn, "o", "r", false, |_h| true)
+    let mut seen = std::collections::HashSet::new();
+    sync::prs::sync_prs(&ctx, false, &mut seen, |_h| true)
         .await
         .unwrap();
     let dir = tempfile::tempdir().unwrap();

@@ -34,6 +34,7 @@ use crate::store::issues::upsert_cross_ref;
 use crate::store::issues::upsert_issue;
 use crate::store::sync_state;
 use crate::store::sync_state::RunPhase;
+use crate::sync::WalkCtx;
 use crate::sync::next_cursor;
 use crate::sync::relationships::endpoint;
 use crate::sync::relationships::self_endpoint;
@@ -601,17 +602,28 @@ async fn persist_issue(
 ///
 /// Returns an error on GraphQL transport/decoding failures, a missing
 /// `repository`, or any persistence failure.
+// `seen` takes a concrete `HashSet<String>` (never a caller-supplied hasher):
+// this is an internal accumulator, not a public collection API.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "seen is a private scratch accumulator built and consumed entirely within sync; \
+              generalizing over BuildHasher adds a type parameter with no caller"
+)]
 pub async fn sync_issues<F>(
-    client: &crate::github::GithubClient,
-    conn: &Connection,
-    owner: &str,
-    repo: &str,
+    ctx: &WalkCtx<'_>,
     full: bool,
+    seen: &mut HashSet<String>,
     mut budget_ok: F,
 ) -> anyhow::Result<SyncStop>
 where
     F: FnMut(&http::HeaderMap) -> bool,
 {
+    // Rebind the walk's per-run invariants once so the body below (shared with
+    // sync_prs) is untouched by the WalkCtx introduction.
+    let client = ctx.client;
+    let conn = ctx.conn;
+    let owner = ctx.owner;
+    let repo = ctx.repo;
     let state = sync_state::get(conn, ENTITY)?;
     let watermark = state.updated_watermark;
     // Capture whether this is a fresh (non-resumed) run before mutating the cursor.
@@ -619,9 +631,6 @@ where
     let mut cursor = state.resume_cursor;
     // Highest `updatedAt` seen this pass: the early-stop floor for the next run.
     let mut run_max: Option<DateTime<Utc>> = None;
-    // Collect seen node_ids only when doing a full run (for deletion
-    // reconciliation).
-    let mut seen: HashSet<String> = HashSet::new();
     let repo_full = format!("{owner}/{repo}");
 
     loop {
@@ -698,7 +707,7 @@ where
     // run has an incomplete seen-set (it re-walked only the remaining pages), so
     // reconciling would wrongly delete entities seen on the skipped pages.
     if full && started_fresh {
-        crate::store::issues::mark_deleted_except(conn, &seen)?;
+        crate::store::issues::mark_deleted_except(conn, seen)?;
     }
 
     Ok(SyncStop::Completed)

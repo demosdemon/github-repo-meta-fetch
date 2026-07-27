@@ -9,6 +9,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use rusqlite::Connection;
 
+use crate::clock::Clock;
 use crate::config::Reserve;
 use crate::github::GithubClient;
 use crate::ratelimit::budget;
@@ -57,12 +58,33 @@ fn wait_for(
     max_wait.map_or(wait, |cap| wait.min(cap))
 }
 
+/// Everything an entity walk needs that varies neither between pages nor
+/// across a pause.
+///
+/// Exists to keep the phase functions under clippy's seven-argument limit as
+/// cross-cutting concerns accumulate; `clock` was the second such concern
+/// after `conn`.
+pub struct WalkCtx<'a> {
+    /// The GitHub API client for this walk.
+    pub client: &'a GithubClient,
+    /// The SQLite connection this walk reads from and persists into.
+    pub conn: &'a Connection,
+    /// The repository owner.
+    pub owner: &'a str,
+    /// The repository name.
+    pub repo: &'a str,
+    /// Wall-clock source; production passes [`crate::clock::SystemClock`].
+    pub clock: &'a dyn Clock,
+}
+
 /// Top-level sync driver: runs taxonomy + selected entity phases while honoring
 /// the rate-limit reserve floor and checkpoint/resume semantics.
 pub struct Syncer<'a> {
     pub client: &'a GithubClient,
     pub conn: &'a Connection,
     pub rl: &'a mut RateLimitStore,
+    /// Wall-clock source; production passes [`crate::clock::SystemClock`].
+    pub clock: &'a dyn Clock,
     pub reserve: Reserve,
     /// `--cost-ceiling` override forwarded to the [`CostEstimator`]; `None`
     /// uses the per-`QueryType` conservative ceiling.
@@ -115,7 +137,7 @@ impl Syncer<'_> {
 
         // Stamp last_full_sync only when a --full run reconciled BOTH phases.
         if self.full && do_issues && do_prs {
-            crate::store::repo_meta::set_last_full_sync(self.conn, chrono::Utc::now().timestamp())?;
+            crate::store::repo_meta::set_last_full_sync(self.conn, self.clock.now().timestamp())?;
         }
         tracing::info!("sync complete");
         Ok(Outcome::Completed)
@@ -132,6 +154,14 @@ impl Syncer<'_> {
         let reserve = self.reserve;
         let full = self.full;
         let qt = phase.query_type();
+        let ctx = WalkCtx {
+            client: self.client,
+            conn: self.conn,
+            owner,
+            repo,
+            clock: self.clock,
+        };
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         loop {
             // budget_ok: reconcile the shared store from the authoritative
@@ -170,26 +200,10 @@ impl Syncer<'_> {
                 };
                 match phase {
                     Phase::Issues => {
-                        crate::sync::issues::sync_issues(
-                            self.client,
-                            self.conn,
-                            owner,
-                            repo,
-                            full,
-                            budget_ok,
-                        )
-                        .await?
+                        crate::sync::issues::sync_issues(&ctx, full, &mut seen, budget_ok).await?
                     }
                     Phase::Prs => {
-                        crate::sync::prs::sync_prs(
-                            self.client,
-                            self.conn,
-                            owner,
-                            repo,
-                            full,
-                            budget_ok,
-                        )
-                        .await?
+                        crate::sync::prs::sync_prs(&ctx, full, &mut seen, budget_ok).await?
                     }
                 }
             };
@@ -205,7 +219,7 @@ impl Syncer<'_> {
                         return Ok(Outcome::Paused);
                     }
                     let reset = self.rl.get(budget::Resource::GraphQL)?.map(|b| b.reset);
-                    let wait = wait_for(reset, chrono::Utc::now(), self.max_wait);
+                    let wait = wait_for(reset, self.clock.now(), self.max_wait);
                     tracing::info!(
                         wait_secs = wait.as_secs(),
                         "rate-limit floor reached; waiting until reset"

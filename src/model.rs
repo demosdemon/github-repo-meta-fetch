@@ -398,6 +398,12 @@ mod tests {
 
     use super::*;
 
+    fn dt(s: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(s)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
     #[test]
     fn slug_parses_owner_repo() {
         let s = RepoSlug::from_str("octocat/hello-world").unwrap();
@@ -537,8 +543,8 @@ mod tests {
             changed_files: 0,
             author: None,
             body: String::new(),
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
+            created_at: dt("2026-01-01T00:00:00Z"),
+            updated_at: dt("2026-01-01T00:00:00Z"),
             closed_at: None,
             milestone: None,
             labels: vec![],

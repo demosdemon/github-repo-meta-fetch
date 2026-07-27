@@ -155,6 +155,7 @@ impl Sync {
                 client: &client,
                 conn: &conn,
                 rl: &mut rl,
+                clock: &crate::clock::SystemClock,
                 reserve,
                 cost_ceiling,
                 no_wait,
