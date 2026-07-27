@@ -1,6 +1,7 @@
 #![cfg_attr(test, expect(clippy::unwrap_used))]
 
 pub mod cli;
+pub mod clock;
 pub mod config;
 pub mod fingerprint;
 pub mod github;
