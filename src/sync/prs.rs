@@ -430,21 +430,15 @@ async fn drain_review_threads(
 ///
 /// Returns an error on GraphQL transport/decoding failure, a missing
 /// `repository`, or any persistence failure.
-// `seen` takes a concrete `HashSet<String>` (never a caller-supplied hasher):
-// this is an internal accumulator, not a public collection API.
-#[expect(
-    clippy::implicit_hasher,
-    reason = "seen is a private scratch accumulator built and consumed entirely within sync; \
-              generalizing over BuildHasher adds a type parameter with no caller"
-)]
-pub async fn sync_prs<F>(
+pub async fn sync_prs<F, S>(
     ctx: &WalkCtx<'_>,
     full: bool,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<String, S>,
     mut budget_ok: F,
 ) -> anyhow::Result<SyncStop>
 where
     F: FnMut(&http::HeaderMap) -> bool,
+    S: std::hash::BuildHasher,
 {
     // Rebind the walk's per-run invariants once so the body below (shared with
     // sync_issues) is untouched by the WalkCtx introduction.
