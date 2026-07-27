@@ -299,8 +299,16 @@ coverage that the inline version could not have without a real sleep."
 - Consumes: `clock::Clock`, `clock::SystemClock` (Task 1); `wait_for` (Task 2).
 - Produces:
   - `pub struct WalkCtx<'a> { pub client: &'a GithubClient, pub conn: &'a Connection, pub owner: &'a str, pub repo: &'a str, pub clock: &'a dyn Clock }` in `crate::sync`
-  - `pub async fn sync_issues<F>(ctx: &WalkCtx<'_>, full: bool, seen: &mut HashSet<String>, budget_ok: F) -> anyhow::Result<SyncStop>`
-  - `pub async fn sync_prs<F>(ctx: &WalkCtx<'_>, full: bool, seen: &mut HashSet<String>, budget_ok: F) -> anyhow::Result<SyncStop>`
+  - `pub async fn sync_issues<F, S>(ctx: &WalkCtx<'_>, full: bool, seen: &mut HashSet<String, S>, budget_ok: F) -> anyhow::Result<SyncStop> where F: FnMut(&http::HeaderMap) -> bool, S: std::hash::BuildHasher`
+  - `pub async fn sync_prs<F, S>(...)` — same shape
+
+  > `seen` is generic over the hasher because a `pub fn` taking
+  > `HashSet<String>` with the default hasher trips `clippy::implicit_hasher`,
+  > and this crate already resolves that lint by genericizing rather than
+  > suppressing: `mark_deleted_except<S: std::hash::BuildHasher>` at
+  > `src/store/mod.rs:115`, `src/store/issues.rs:215`, and
+  > `src/store/prs.rs:313`. Every caller builds with `HashSet::new()`, so `S`
+  > infers as `RandomState` and no call site names it.
   - `Syncer` gains `pub clock: &'a dyn Clock`
 
 > **Why `seen` moves now, before it is used differently:** adding `clock` alone would take these functions to 7 parameters and `seen` to 8, tripping `too_many_arguments`. `WalkCtx` absorbs five, so both fit. The functions still populate `seen` and reconcile internally in this task — Task 4 changes that.
@@ -343,16 +351,22 @@ use crate::clock::Clock;
 In `src/sync/issues.rs`, replace the `sync_issues` signature:
 
 ```rust
-pub async fn sync_issues<F>(
+pub async fn sync_issues<F, S>(
     ctx: &crate::sync::WalkCtx<'_>,
     full: bool,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<String, S>,
     mut budget_ok: F,
 ) -> anyhow::Result<SyncStop>
 where
     F: FnMut(&http::HeaderMap) -> bool,
+    S: std::hash::BuildHasher,
 {
 ```
+
+> The hasher generic is required, not optional: without it `clippy::implicit_hasher`
+> fires on these public functions, and this crate's policy is to fix the lint
+> rather than `#[expect]` it. Precedent: `mark_deleted_except<S: BuildHasher>`
+> in `src/store/mod.rs`, `src/store/issues.rs`, `src/store/prs.rs`.
 
 Inside the body, delete the local `let mut seen: HashSet<String> = HashSet::new();` (the parameter replaces it) and rebind the old parameter names once at the top so the rest of the body is untouched:
 
