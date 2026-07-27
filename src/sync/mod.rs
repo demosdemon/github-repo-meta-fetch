@@ -5,6 +5,8 @@ pub mod taxonomy;
 
 use std::time::Duration;
 
+use chrono::DateTime;
+use chrono::Utc;
 use rusqlite::Connection;
 
 use crate::config::Reserve;
@@ -38,6 +40,21 @@ pub enum Outcome {
 pub enum OnlyTarget {
     Issues,
     Prs,
+}
+
+/// How long to wait for `reset`, clamped at zero and capped by `max_wait`.
+///
+/// A reset already in the past — or absent entirely — yields
+/// [`Duration::ZERO`] rather than blocking.
+fn wait_for(
+    reset: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+    max_wait: Option<Duration>,
+) -> Duration {
+    let wait = reset.map_or(Duration::ZERO, |r| {
+        (r - now).to_std().unwrap_or(Duration::ZERO)
+    });
+    max_wait.map_or(wait, |cap| wait.min(cap))
 }
 
 /// Top-level sync driver: runs taxonomy + selected entity phases while honoring
@@ -188,10 +205,7 @@ impl Syncer<'_> {
                         return Ok(Outcome::Paused);
                     }
                     let reset = self.rl.get(budget::Resource::GraphQL)?.map(|b| b.reset);
-                    let wait = reset.map_or(Duration::ZERO, |r| {
-                        (r - chrono::Utc::now()).to_std().unwrap_or(Duration::ZERO)
-                    });
-                    let wait = self.max_wait.map_or(wait, |cap| wait.min(cap));
+                    let wait = wait_for(reset, chrono::Utc::now(), self.max_wait);
                     tracing::info!(
                         wait_secs = wait.as_secs(),
                         "rate-limit floor reached; waiting until reset"
@@ -216,5 +230,55 @@ impl Phase {
             Phase::Issues => QueryType::IssuesPage,
             Phase::Prs => QueryType::PrsPage,
         }
+    }
+}
+
+#[cfg(test)]
+mod wait_tests {
+    use chrono::DateTime;
+
+    use super::*;
+
+    fn dt(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
+    #[test]
+    fn future_reset_yields_the_difference() {
+        let now = dt("2026-07-20T09:00:00Z");
+        let reset = dt("2026-07-20T09:05:00Z");
+        assert_eq!(wait_for(Some(reset), now, None), Duration::from_secs(300));
+    }
+
+    #[test]
+    fn past_reset_clamps_to_zero() {
+        let now = dt("2026-07-20T09:05:00Z");
+        let reset = dt("2026-07-20T09:00:00Z");
+        assert_eq!(wait_for(Some(reset), now, None), Duration::ZERO);
+    }
+
+    #[test]
+    fn missing_reset_yields_zero() {
+        let now = dt("2026-07-20T09:00:00Z");
+        assert_eq!(
+            wait_for(None, now, Some(Duration::from_secs(60))),
+            Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn max_wait_caps_a_longer_wait() {
+        let now = dt("2026-07-20T09:00:00Z");
+        let reset = dt("2026-07-20T09:05:00Z");
+        let capped = wait_for(Some(reset), now, Some(Duration::from_secs(30)));
+        assert_eq!(capped, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn max_wait_does_not_extend_a_shorter_wait() {
+        let now = dt("2026-07-20T09:00:00Z");
+        let reset = dt("2026-07-20T09:00:10Z");
+        let wait = wait_for(Some(reset), now, Some(Duration::from_secs(600)));
+        assert_eq!(wait, Duration::from_secs(10));
     }
 }
