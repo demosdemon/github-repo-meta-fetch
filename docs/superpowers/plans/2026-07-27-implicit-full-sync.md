@@ -1501,8 +1501,17 @@ Deletion is the one thing an incremental pass cannot see (a deleted issue no lon
 
 Reconciliation is stricter than the walk itself: it needs a walk that both started fresh and ran to completion, because a walk resumed from a checkpoint has only seen the pages after it. A walk that pauses at the rate-limit floor and waits for the reset still reconciles — it never left the process. A walk resumed after `--no-wait` exited does not, because the set of items it saw died with the previous process.
 
-`meta-fetch status` and the tree's own `README.md` report both facts per phase. A populated `full_sync` beside `reconciled: never` means the history is current but soft-deletes are outstanding; a single uninterrupted `--full` clears it.
+`meta-fetch status` and the tree's own `README.md` both report these two facts per phase. When a phase has a full-walk timestamp but no reconcile timestamp — `reconciled: None` in `status`, `last reconciled: never` in the tree's `README.md` — the history is current but soft-deletes are outstanding; a single uninterrupted `--full` clears it.
 ```
+
+> **Correction, made during execution.** An earlier version of this paragraph
+> claimed a populated `full_sync` sits beside `reconciled: never`. No surface
+> prints that. `status` uses a `{:?}` Debug format on
+> `Option<DateTime<Utc>>` (`src/cli.rs:241`), so an unreconciled phase renders
+> `reconciled: None`. The word `never` comes only from the *rendered tree's*
+> `README.md`, via `fmt_ts` (`src/render/mod.rs:51-56`), where the field is
+> spelled `- issues last reconciled: never`. Any literal output string quoted
+> in prose must be attributed to the surface that actually prints it.
 
 - [ ] **Step 3: Update the flag table and note the exit code**
 
