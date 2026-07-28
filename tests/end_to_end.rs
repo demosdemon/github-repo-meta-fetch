@@ -160,4 +160,12 @@ async fn e2e_renders_pr_subtree_and_readme_counts() {
         readme.contains("merged PRs: 0"),
         "README should report 0 merged PRs, got:\n{readme}"
     );
+    assert!(
+        readme.contains("- issues last full sync: "),
+        "README should report the issues full-walk marker:\n{readme}"
+    );
+    assert!(
+        readme.contains("- PRs last reconciled: "),
+        "README should report the PRs reconcile marker:\n{readme}"
+    );
 }

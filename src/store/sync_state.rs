@@ -46,6 +46,12 @@ pub struct SyncState {
     pub resume_cursor: Option<String>,
     /// Current phase of the sync run.
     pub run_phase: RunPhase,
+    /// When this phase last completed a walk of its entire history, fresh or
+    /// resumed. `None` until one completes.
+    pub last_full_sync_at: Option<DateTime<Utc>>,
+    /// When this phase last reconciled deletions, which requires a full walk
+    /// that both started fresh and ran to completion. `None` until one does.
+    pub last_reconciled_at: Option<DateTime<Utc>>,
 }
 
 /// Read the sync state for `entity_type`.  Returns a default [`RunPhase::Idle`]
@@ -56,8 +62,8 @@ pub struct SyncState {
 /// Returns any [`rusqlite::Error`] other than `QueryReturnedNoRows`.
 pub fn get(conn: &Connection, entity_type: &str) -> rusqlite::Result<SyncState> {
     conn.query_row(
-        "SELECT updated_watermark, resume_cursor, run_phase \
-         FROM sync_state WHERE entity_type=?1",
+        "SELECT updated_watermark, resume_cursor, run_phase, last_full_sync_at, \
+         last_reconciled_at FROM sync_state WHERE entity_type=?1",
         [entity_type],
         |r| {
             Ok(SyncState {
@@ -68,6 +74,12 @@ pub fn get(conn: &Connection, entity_type: &str) -> rusqlite::Result<SyncState> 
                     .and_then(|s| DateTime::from_timestamp(s, 0)),
                 resume_cursor: r.get(1)?,
                 run_phase: RunPhase::parse(&r.get::<_, String>(2)?),
+                last_full_sync_at: r
+                    .get::<_, Option<i64>>(3)?
+                    .and_then(|s| DateTime::from_timestamp(s, 0)),
+                last_reconciled_at: r
+                    .get::<_, Option<i64>>(4)?
+                    .and_then(|s| DateTime::from_timestamp(s, 0)),
             })
         },
     )
@@ -78,6 +90,8 @@ pub fn get(conn: &Connection, entity_type: &str) -> rusqlite::Result<SyncState> 
                 updated_watermark: None,
                 resume_cursor: None,
                 run_phase: RunPhase::Idle,
+                last_full_sync_at: None,
+                last_reconciled_at: None,
             })
         } else {
             Err(e)
@@ -107,6 +121,10 @@ pub fn set_cursor(
 
 /// Advance the watermark and mark the run done.  Clears the resume cursor.
 ///
+/// `full_sync_at` stamps `last_full_sync_at` when this pass walked the entire
+/// history; pass `None` for an incremental pass. The `COALESCE` is what keeps
+/// an incremental pass from clearing a marker an earlier full pass set.
+///
 /// # Errors
 ///
 /// Propagates any [`rusqlite::Error`] from the underlying execute call.
@@ -114,13 +132,46 @@ pub fn complete(
     conn: &Connection,
     entity_type: &str,
     watermark: Option<DateTime<Utc>>,
+    full_sync_at: Option<DateTime<Utc>>,
 ) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO sync_state (entity_type, updated_watermark, resume_cursor, run_phase) \
-         VALUES (?1, ?2, NULL, 'done') \
+        "INSERT INTO sync_state \
+            (entity_type, updated_watermark, resume_cursor, run_phase, last_full_sync_at) \
+         VALUES (?1, ?2, NULL, 'done', ?3) \
          ON CONFLICT(entity_type) DO UPDATE SET \
-            updated_watermark=excluded.updated_watermark, resume_cursor=NULL, run_phase='done'",
-        rusqlite::params![entity_type, watermark.map(|w| w.timestamp())],
+            updated_watermark=excluded.updated_watermark, \
+            resume_cursor=NULL, \
+            run_phase='done', \
+            last_full_sync_at=COALESCE(excluded.last_full_sync_at, \
+                                       sync_state.last_full_sync_at)",
+        rusqlite::params![
+            entity_type,
+            watermark.map(|w| w.timestamp()),
+            full_sync_at.map(|f| f.timestamp())
+        ],
+    )?;
+    Ok(())
+}
+
+/// Record that this phase reconciled deletions at `at`.
+///
+/// Written separately from [`complete`], which runs inside the phase function
+/// before and independently of the reconciliation `run_phase` performs after
+/// its retry loop. A crash between the two leaves rows soft-deleted with the
+/// marker unset, so the next full walk reconciles again — `mark_deleted_except`
+/// is idempotent, making that a redundant pass rather than a corruption.
+///
+/// # Errors
+///
+/// Propagates any [`rusqlite::Error`] from the underlying execute call.
+pub fn mark_reconciled(
+    conn: &Connection,
+    entity_type: &str,
+    at: DateTime<Utc>,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE sync_state SET last_reconciled_at=?2 WHERE entity_type=?1",
+        rusqlite::params![entity_type, at.timestamp()],
     )?;
     Ok(())
 }
@@ -149,10 +200,57 @@ mod tests {
         assert_eq!(s.resume_cursor.as_deref(), Some("CUR1"));
         assert_eq!(s.run_phase, RunPhase::Paginating);
 
-        complete(&conn, "issues", Some(dt("2026-06-10T00:00:00Z"))).unwrap();
+        complete(&conn, "issues", Some(dt("2026-06-10T00:00:00Z")), None).unwrap();
         let s = get(&conn, "issues").unwrap();
         assert_eq!(s.run_phase, RunPhase::Done);
         assert_eq!(s.resume_cursor, None);
         assert_eq!(s.updated_watermark, Some(dt("2026-06-10T00:00:00Z")));
+    }
+
+    #[test]
+    fn full_pass_stamps_and_incremental_pass_preserves() {
+        let conn = crate::store::open_in_memory().unwrap();
+        let at = dt("2026-07-20T09:31:52Z");
+
+        // A full pass stamps exactly the instant handed in. Asserting the
+        // exact value also pins complete()'s parameter order: a transposition
+        // with `watermark` would show up here immediately.
+        complete(&conn, "issues", Some(dt("2026-06-10T00:00:00Z")), Some(at)).unwrap();
+        let s = get(&conn, "issues").unwrap();
+        assert_eq!(s.last_full_sync_at, Some(at));
+        assert_eq!(s.updated_watermark, Some(dt("2026-06-10T00:00:00Z")));
+
+        // A later incremental pass advances the watermark but must not clear
+        // the marker -- this is the COALESCE path.
+        complete(&conn, "issues", Some(dt("2026-06-11T00:00:00Z")), None).unwrap();
+        let s = get(&conn, "issues").unwrap();
+        assert_eq!(s.last_full_sync_at, Some(at));
+        assert_eq!(s.updated_watermark, Some(dt("2026-06-11T00:00:00Z")));
+    }
+
+    #[test]
+    fn fresh_state_has_no_markers() {
+        let conn = crate::store::open_in_memory().unwrap();
+        let s = get(&conn, "issues").unwrap();
+        assert_eq!(s.last_full_sync_at, None);
+        assert_eq!(s.last_reconciled_at, None);
+    }
+
+    #[test]
+    fn mark_reconciled_touches_one_phase_only() {
+        let conn = crate::store::open_in_memory().unwrap();
+        let at = dt("2026-07-20T09:31:52Z");
+        complete(&conn, "issues", None, Some(at)).unwrap();
+        complete(&conn, "pull_requests", None, Some(at)).unwrap();
+
+        mark_reconciled(&conn, "issues", at).unwrap();
+
+        let i = get(&conn, "issues").unwrap();
+        let p = get(&conn, "pull_requests").unwrap();
+        assert_eq!(i.last_reconciled_at, Some(at));
+        assert_eq!(p.last_reconciled_at, None);
+        // Other columns survive.
+        assert_eq!(i.last_full_sync_at, Some(at));
+        assert_eq!(i.run_phase, RunPhase::Done);
     }
 }

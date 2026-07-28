@@ -47,6 +47,14 @@ fn index_slug(name: &str) -> String {
     s
 }
 
+/// Render an optional timestamp for the tree's `README.md`.
+fn fmt_ts(t: Option<chrono::DateTime<chrono::Utc>>) -> String {
+    t.map_or_else(
+        || "never".to_string(),
+        |dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    )
+}
+
 /// Remove a directory (if present) and recreate it empty — index dirs are fully
 /// derived.
 fn reset_dir(dir: &Path) -> std::io::Result<()> {
@@ -329,20 +337,10 @@ fn write_readme_doc(
     })?;
 
     let issues_state = crate::store::sync_state::get(conn, "issues")?;
-    let watermark = issues_state.updated_watermark.map_or_else(
-        || "never".to_string(),
-        |w| w.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-    );
+    let watermark = fmt_ts(issues_state.updated_watermark);
+    let issues_full = fmt_ts(issues_state.last_full_sync_at);
+    let issues_recon = fmt_ts(issues_state.last_reconciled_at);
     let run_phase = format!("{:?}", issues_state.run_phase);
-    let last_full = meta
-        .last_full_sync_at
-        .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
-        .map_or_else(
-            || "never".to_string(),
-            |dt: chrono::DateTime<chrono::Utc>| {
-                dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-            },
-        );
 
     let (pr_open, pr_draft, pr_closed, pr_merged) = store::prs::effective_state_counts(conn)?;
     let pr_deleted: i64 = conn.query_row(
@@ -351,19 +349,24 @@ fn write_readme_doc(
         |r| r.get(0),
     )?;
     let prs_state = crate::store::sync_state::get(conn, "pull_requests")?;
-    let pr_watermark = prs_state.updated_watermark.map_or_else(
-        || "never".to_string(),
-        |w| w.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-    );
+    let pr_watermark = fmt_ts(prs_state.updated_watermark);
+    let prs_full = fmt_ts(prs_state.last_full_sync_at);
+    let prs_recon = fmt_ts(prs_state.last_reconciled_at);
     let pr_phase = format!("{:?}", prs_state.run_phase);
 
     let readme = format!(
         "# {}/{}\n\n\
          - open issues: {open}\n- closed issues: {closed}\n- soft-deleted issues: {deleted}\n\
-         - issues watermark: {watermark}\n- issues sync phase: {run_phase}\n\
+         - issues watermark: {watermark}\n\
+         - issues sync phase: {run_phase}\n\
+         - issues last full sync: {issues_full}\n\
+         - issues last reconciled: {issues_recon}\n\
          - open PRs: {pr_open}\n- draft PRs: {pr_draft}\n- closed PRs: {pr_closed}\n- merged PRs: {pr_merged}\n\
-         - soft-deleted PRs: {pr_deleted}\n- PRs watermark: {pr_watermark}\n- PRs sync phase: {pr_phase}\n\
-         - last full sync: {last_full}\n",
+         - soft-deleted PRs: {pr_deleted}\n\
+         - PRs watermark: {pr_watermark}\n\
+         - PRs sync phase: {pr_phase}\n\
+         - PRs last full sync: {prs_full}\n\
+         - PRs last reconciled: {prs_recon}\n",
         meta.owner, meta.repo
     );
     std::fs::write(out.join("README.md"), readme)?;

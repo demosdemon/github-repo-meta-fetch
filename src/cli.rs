@@ -237,12 +237,15 @@ impl Status {
         println!("relationships: {dep_edges} dependency, {sub_edges} sub-issue");
         println!("run_phase: {:?}", s.run_phase);
         println!("watermark: {:?}", s.updated_watermark);
-        println!("last_full_sync_at: {:?}", meta.last_full_sync_at);
+        println!("full_sync: {:?}", s.last_full_sync_at);
+        println!("reconciled: {:?}", s.last_reconciled_at);
         println!(
             "prs: {pr_open} open, {pr_draft} draft, {pr_closed} closed, {pr_merged} merged, {pr_deleted} soft-deleted"
         );
         println!("prs run_phase: {:?}", ps.run_phase);
         println!("prs watermark: {:?}", ps.updated_watermark);
+        println!("prs full_sync: {:?}", ps.last_full_sync_at);
+        println!("prs reconciled: {:?}", ps.last_reconciled_at);
         Ok(ExitCode::SUCCESS)
     }
 }

@@ -441,10 +441,13 @@ where
 {
     // Rebind the walk's per-run invariants once so the body below (shared with
     // sync_issues) is untouched by the WalkCtx introduction.
-    let client = ctx.client;
-    let conn = ctx.conn;
-    let owner = ctx.owner;
-    let repo = ctx.repo;
+    let WalkCtx {
+        client,
+        conn,
+        owner,
+        repo,
+        clock,
+    } = *ctx;
     let state = sync_state::get(conn, ENTITY)?;
     let watermark = state.updated_watermark;
     let mut cursor = state.resume_cursor;
@@ -549,7 +552,8 @@ where
     // so its `run_max` is older than what the interrupted first attempt already
     // synced. Keeping the larger value costs at most a re-walk, never a skip.
     // `None` sorts below `Some`, so this also handles either side being unset.
-    sync_state::complete(conn, ENTITY, run_max.max(watermark))?;
+    let full_sync_at = full.then(|| clock.now());
+    sync_state::complete(conn, ENTITY, run_max.max(watermark), full_sync_at)?;
 
     Ok(SyncStop::Completed)
 }

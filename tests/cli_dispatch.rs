@@ -7,6 +7,7 @@ use github_repo_meta_fetch::model::Issue;
 use github_repo_meta_fetch::model::IssueState;
 use github_repo_meta_fetch::model::PullRequest;
 use github_repo_meta_fetch::store;
+use predicates::prelude::*;
 use predicates::str::contains;
 
 fn dt(s: &str) -> DateTime<Utc> {
@@ -110,6 +111,35 @@ fn status_prints_pr_counts() {
         .assert()
         .success()
         .stdout(contains("prs:"));
+}
+
+#[test]
+fn status_prints_per_phase_markers() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("c.sqlite3");
+    seed_db_with_pr(&db);
+    Command::cargo_bin("meta-fetch")
+        .unwrap()
+        .args(["status", "--db", db.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(contains("full_sync:"))
+        .stdout(contains("reconciled:"))
+        .stdout(contains("prs full_sync:"))
+        .stdout(contains("prs reconciled:"));
+}
+
+#[test]
+fn status_no_longer_prints_the_whole_repo_marker() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("c.sqlite3");
+    seed_db(&db);
+    Command::cargo_bin("meta-fetch")
+        .unwrap()
+        .args(["status", "--db", db.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(contains("last_full_sync_at:").not());
 }
 
 #[test]

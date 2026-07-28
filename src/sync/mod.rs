@@ -135,10 +135,6 @@ impl Syncer<'_> {
             return Ok(Outcome::Paused);
         }
 
-        // Stamp last_full_sync only when a --full run reconciled BOTH phases.
-        if self.full && do_issues && do_prs {
-            crate::store::repo_meta::set_last_full_sync(self.conn, self.clock.now().timestamp())?;
-        }
         tracing::info!("sync complete");
         Ok(Outcome::Completed)
     }

@@ -6,7 +6,6 @@ pub struct RepoMeta {
     pub owner: String,
     pub repo: String,
     pub padding_width: u32,
-    pub last_full_sync_at: Option<i64>,
 }
 
 /// Insert the `repo_meta` row if absent (idempotent). Does not change
@@ -32,28 +31,17 @@ pub fn ensure(conn: &Connection, owner: &str, repo: &str) -> rusqlite::Result<()
 /// Returns a [`rusqlite::Error`] on database failure.
 pub fn get(conn: &Connection) -> rusqlite::Result<Option<RepoMeta>> {
     conn.query_row(
-        "SELECT owner, repo, padding_width, last_full_sync_at FROM repo_meta WHERE id=1",
+        "SELECT owner, repo, padding_width FROM repo_meta WHERE id=1",
         [],
         |r| {
             Ok(RepoMeta {
                 owner: r.get(0)?,
                 repo: r.get(1)?,
                 padding_width: u32::try_from(r.get::<_, i64>(2)?).unwrap_or(4),
-                last_full_sync_at: r.get(3)?,
             })
         },
     )
     .optional()
-}
-
-/// Update `last_full_sync_at` on the `repo_meta` row.
-///
-/// # Errors
-///
-/// Returns a [`rusqlite::Error`] if the update fails.
-pub fn set_last_full_sync(conn: &Connection, ts: i64) -> rusqlite::Result<()> {
-    conn.execute("UPDATE repo_meta SET last_full_sync_at=?1 WHERE id=1", [ts])?;
-    Ok(())
 }
 
 /// Compute the minimum width needed to represent `max_number`, never below 4.
@@ -125,7 +113,6 @@ mod tests {
         assert_eq!(m.owner, "octocat");
         assert_eq!(m.repo, "hello-world");
         assert_eq!(m.padding_width, 4);
-        assert_eq!(m.last_full_sync_at, None);
     }
 
     #[test]

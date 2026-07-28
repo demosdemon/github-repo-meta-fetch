@@ -27,6 +27,7 @@ fn migrations() -> Migrations<'static> {
         M::up(include_str!("migrations/0001_init.sql")),
         M::up(include_str!("migrations/0002_pull_requests.sql")),
         M::up(include_str!("migrations/0003_issue_relationships.sql")),
+        M::up(include_str!("migrations/0004_phase_full_sync.sql")),
     ])
 }
 
@@ -129,6 +130,87 @@ pub fn mark_deleted_except<S: std::hash::BuildHasher>(
          WHERE deleted = 0 AND node_id NOT IN (SELECT value FROM json_each(?1))"
     );
     conn.execute(&sql, rusqlite::params![seen_json])
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    #[test]
+    fn v4_backfills_phase_markers_from_repo_meta() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrations().to_version(&mut conn, 3).unwrap();
+        conn.execute(
+            "INSERT INTO repo_meta (id, owner, repo, last_full_sync_at) VALUES (1,'o','r',1700)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sync_state (entity_type, run_phase) VALUES ('issues','done')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sync_state (entity_type, run_phase) VALUES ('pull_requests','done')",
+            [],
+        )
+        .unwrap();
+
+        migrations().to_version(&mut conn, 4).unwrap();
+
+        for entity in ["issues", "pull_requests"] {
+            let (full, recon): (Option<i64>, Option<i64>) = conn
+                .query_row(
+                    "SELECT last_full_sync_at, last_reconciled_at FROM sync_state \
+                     WHERE entity_type=?1",
+                    [entity],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(full, Some(1700), "{entity} should carry the backfill");
+            assert_eq!(
+                recon, None,
+                "{entity} reconciliation has no backfill source"
+            );
+        }
+    }
+
+    #[test]
+    fn v4_leaves_phases_unstamped_when_repo_meta_is_null() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrations().to_version(&mut conn, 3).unwrap();
+        conn.execute(
+            "INSERT INTO repo_meta (id, owner, repo) VALUES (1,'o','r')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sync_state (entity_type, run_phase) VALUES ('issues','done')",
+            [],
+        )
+        .unwrap();
+
+        migrations().to_version(&mut conn, 4).unwrap();
+
+        let full: Option<i64> = conn
+            .query_row(
+                "SELECT last_full_sync_at FROM sync_state WHERE entity_type='issues'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(full, None, "a NULL source must not stamp a marker");
+    }
+
+    #[test]
+    fn v4_drops_the_repo_meta_column() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrations().to_latest(&mut conn).unwrap();
+        let err = conn.query_row("SELECT last_full_sync_at FROM repo_meta", [], |r| {
+            r.get::<_, Option<i64>>(0)
+        });
+        assert!(err.is_err(), "the whole-repo column should be gone");
+    }
 }
 
 #[cfg(test)]
