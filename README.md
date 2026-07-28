@@ -133,7 +133,7 @@ Deletion is the one thing an incremental pass cannot see (a deleted issue no lon
 
 Reconciliation is stricter than the walk itself: it needs a walk that both started fresh and ran to completion, because a walk resumed from a checkpoint has only seen the pages after it. A walk that pauses at the rate-limit floor and waits for the reset still reconciles — it never left the process. A walk resumed after `--no-wait` exited does not, because the set of items it saw died with the previous process.
 
-`meta-fetch status` and the tree's own `README.md` report both facts per phase. A populated `full_sync` beside `reconciled: never` means the history is current but soft-deletes are outstanding; a single uninterrupted `--full` clears it.
+`meta-fetch status` and the tree's own `README.md` both report these two facts per phase. When a phase has a full-walk timestamp but no reconcile timestamp — `reconciled: None` in `status`, `last reconciled: never` in the tree's `README.md` — the history is current but soft-deletes are outstanding; a single uninterrupted `--full` clears it.
 
 ## Rate-limit awareness
 
