@@ -426,3 +426,59 @@ async fn resume_matches_uninterrupted_prs() {
     assert_eq!(review_comment_rows(&conn_a), review_comment_rows(&conn_b));
     assert_eq!(comment_rows(&conn_a), comment_rows(&conn_b));
 }
+
+#[tokio::test]
+async fn only_prs_leaves_the_issues_marker_untouched() {
+    use github_repo_meta_fetch::config::Reserve;
+    use github_repo_meta_fetch::ratelimit::store::RateLimitStore;
+    use github_repo_meta_fetch::sync::Syncer;
+
+    let server = MockServer::start().await;
+    // Labels/milestones (taxonomy always runs) -- minimal 200s.
+    for p in ["/repos/o/r/labels", "/repos/o/r/milestones"] {
+        Mock::given(method("GET"))
+            .and(path(p))
+            .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(rl(
+            ResponseTemplate::new(200).set_body_string(page("", false, ""))
+        ))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server);
+    let conn = store::open_in_memory().unwrap();
+    store::repo_meta::ensure(&conn, "o", "r").unwrap();
+
+    let clk = test_clock();
+    let mut rl = RateLimitStore::open_in_memory("fp").unwrap();
+    let mut syncer = Syncer {
+        client: &client,
+        conn: &conn,
+        rl: &mut rl,
+        clock: &clk,
+        reserve: Reserve::Percent(0.10),
+        cost_ceiling: Some(30),
+        no_wait: true,
+        max_wait: None,
+        full: false,
+        only: vec![sync::OnlyTarget::Prs],
+    };
+    syncer.run("o", "r").await.unwrap();
+
+    let i = store::sync_state::get(&conn, "issues").unwrap();
+    let p = store::sync_state::get(&conn, "pull_requests").unwrap();
+    assert_eq!(
+        i.last_full_sync_at, None,
+        "the skipped phase must stay unstamped"
+    );
+    assert_eq!(
+        p.last_full_sync_at,
+        Some(clk.0),
+        "the run phase should stamp"
+    );
+}

@@ -148,10 +148,16 @@ impl Syncer<'_> {
         estimator: &mut CostEstimator,
     ) -> anyhow::Result<Outcome> {
         let reserve = self.reserve;
-        let full = self.full;
         let qt = phase.query_type();
         let state = crate::store::sync_state::get(self.conn, phase.entity())?;
         let started_fresh = state.resume_cursor.is_none();
+        // A phase walks everything when forced, or when it has never recorded
+        // a completed full walk. The marker is per-phase, so `--only issues`
+        // decides on the issues marker alone.
+        let full = self.full || state.last_full_sync_at.is_none();
+        if full && !self.full {
+            tracing::info!(phase = ?phase, "no full walk recorded; walking everything");
+        }
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let ctx = WalkCtx {
             client: self.client,
@@ -234,6 +240,7 @@ impl Syncer<'_> {
         // the pages after it, so its seen-set is incomplete.
         if full && started_fresh {
             crate::store::mark_deleted_except(self.conn, phase.entity(), &seen)?;
+            crate::store::sync_state::mark_reconciled(self.conn, phase.entity(), self.clock.now())?;
         }
         Ok(Outcome::Completed)
     }

@@ -666,3 +666,140 @@ async fn full_reconcile_marks_missing_issue_deleted() {
             .deleted
     );
 }
+
+#[tokio::test]
+async fn first_sync_walks_fully_then_goes_incremental() {
+    use github_repo_meta_fetch::config::Reserve;
+    use github_repo_meta_fetch::ratelimit::store::RateLimitStore;
+    use github_repo_meta_fetch::sync::Syncer;
+
+    let server = MockServer::start().await;
+    for p in ["/repos/o/r/labels", "/repos/o/r/milestones"] {
+        Mock::given(method("GET"))
+            .and(path(p))
+            .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+            .mount(&server)
+            .await;
+    }
+    // One page, one issue, older than the watermark seeded below. An
+    // incremental walk would early-stop before persisting it; a full walk
+    // must not.
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(rl_headers(ResponseTemplate::new(200).set_body_string(
+            page(&issue_node(1, "2026-01-01T00:00:00Z"), false, ""),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server);
+    let conn = store::open_in_memory().unwrap();
+    store::repo_meta::ensure(&conn, "o", "r").unwrap();
+    // A watermark exists but no full walk was ever recorded.
+    store::sync_state::complete(
+        &conn,
+        "issues",
+        Some(
+            chrono::DateTime::parse_from_rfc3339("2026-06-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        ),
+        None,
+    )
+    .unwrap();
+
+    let clk = test_clock();
+    let mut rl = RateLimitStore::open_in_memory("fp").unwrap();
+    let mut syncer = Syncer {
+        client: &client,
+        conn: &conn,
+        rl: &mut rl,
+        clock: &clk,
+        reserve: Reserve::Percent(0.10),
+        cost_ceiling: Some(30),
+        no_wait: true,
+        max_wait: None,
+        full: false, // not forced -- the marker must drive it
+        only: vec![sync::OnlyTarget::Issues],
+    };
+    syncer.run("o", "r").await.unwrap();
+
+    // Walked despite being below the watermark.
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM issues", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 1, "an unstamped phase must walk past the watermark");
+
+    let s = store::sync_state::get(&conn, "issues").unwrap();
+    assert_eq!(
+        s.last_full_sync_at,
+        Some(clk.0),
+        "the walk should stamp the marker"
+    );
+    assert_eq!(
+        s.last_reconciled_at,
+        Some(clk.0),
+        "a fresh full walk reconciles"
+    );
+}
+
+#[tokio::test]
+async fn no_wait_resume_stamps_the_walk_but_not_reconciliation() {
+    use github_repo_meta_fetch::config::Reserve;
+    use github_repo_meta_fetch::ratelimit::store::RateLimitStore;
+    use github_repo_meta_fetch::sync::Syncer;
+
+    // A walk resumed from an earlier process's checkpoint completes and
+    // stamps last_full_sync_at, but its seen-set is incomplete, so it must
+    // not claim to have reconciled.
+    let server = MockServer::start().await;
+    for p in ["/repos/o/r/labels", "/repos/o/r/milestones"] {
+        Mock::given(method("GET"))
+            .and(path(p))
+            .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(rl_headers(ResponseTemplate::new(200).set_body_string(
+            page(&issue_node(2, "2026-06-09T00:00:00Z"), false, ""),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server);
+    let conn = store::open_in_memory().unwrap();
+    store::repo_meta::ensure(&conn, "o", "r").unwrap();
+    // A checkpoint left behind by a prior, now-exited process.
+    store::sync_state::set_cursor(
+        &conn,
+        "issues",
+        Some("CUR1"),
+        store::sync_state::RunPhase::Paginating,
+    )
+    .unwrap();
+
+    let clk = test_clock();
+    let mut rl = RateLimitStore::open_in_memory("fp").unwrap();
+    let mut syncer = Syncer {
+        client: &client,
+        conn: &conn,
+        rl: &mut rl,
+        clock: &clk,
+        reserve: Reserve::Percent(0.10),
+        cost_ceiling: Some(30),
+        no_wait: true,
+        max_wait: None,
+        full: false,
+        only: vec![sync::OnlyTarget::Issues],
+    };
+    syncer.run("o", "r").await.unwrap();
+
+    let s = store::sync_state::get(&conn, "issues").unwrap();
+    assert_eq!(s.last_full_sync_at, Some(clk.0), "the walk completed");
+    assert_eq!(
+        s.last_reconciled_at, None,
+        "a cross-process resume has an incomplete seen-set and must not claim reconciliation"
+    );
+}
