@@ -681,16 +681,10 @@ async fn first_sync_walks_fully_then_goes_incremental() {
             .mount(&server)
             .await;
     }
-    // One page, one issue, older than the watermark seeded below. An
-    // incremental walk would early-stop before persisting it; a full walk
-    // must not.
-    Mock::given(method("POST"))
-        .and(path("/graphql"))
-        .respond_with(rl_headers(ResponseTemplate::new(200).set_body_string(
-            page(&issue_node(1, "2026-01-01T00:00:00Z"), false, ""),
-        )))
-        .mount(&server)
-        .await;
+    // Three pages, every issue older than the watermark seeded below. An
+    // incremental walk would early-stop on page 1 alone; a full walk must
+    // walk all three. Reused unbounded across both runs below.
+    mount_three_pages(&server).await;
 
     let client = client_for(&server);
     let conn = store::open_in_memory().unwrap();
@@ -724,11 +718,11 @@ async fn first_sync_walks_fully_then_goes_incremental() {
     };
     syncer.run("o", "r").await.unwrap();
 
-    // Walked despite being below the watermark.
+    // Walked all three pages despite every item being below the watermark.
     let n: i64 = conn
         .query_row("SELECT COUNT(*) FROM issues", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(n, 1, "an unstamped phase must walk past the watermark");
+    assert_eq!(n, 3, "an unstamped phase must walk past the watermark");
 
     let s = store::sync_state::get(&conn, "issues").unwrap();
     assert_eq!(
@@ -740,6 +734,32 @@ async fn first_sync_walks_fully_then_goes_incremental() {
         s.last_reconciled_at,
         Some(clk.0),
         "a fresh full walk reconciles"
+    );
+
+    // Second run: the marker recorded above must now drive an incremental
+    // walk. Page 1's item sits below the watermark, so an incremental walk
+    // early-stops after a single request; if the marker were ignored (the
+    // pre-fix bug), this run would re-walk all three pages exactly like the
+    // first. Count only /graphql requests so the two constant taxonomy GETs
+    // that `Syncer::run` always issues don't dilute the signal.
+    let graphql_requests =
+        |reqs: &[wiremock::Request]| reqs.iter().filter(|r| r.url.path() == "/graphql").count();
+    let before = graphql_requests(&server.received_requests().await.unwrap());
+    syncer.run("o", "r").await.unwrap();
+    let after = graphql_requests(&server.received_requests().await.unwrap());
+    assert_eq!(
+        after - before,
+        1,
+        "a phase with a recorded full walk must go incremental, not re-walk every page"
+    );
+
+    // No rows lost or duplicated by the incremental pass.
+    let n2: i64 = conn
+        .query_row("SELECT COUNT(*) FROM issues", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        n2, 3,
+        "the incremental run must not change the persisted set"
     );
 }
 
@@ -801,5 +821,78 @@ async fn no_wait_resume_stamps_the_walk_but_not_reconciliation() {
     assert_eq!(
         s.last_reconciled_at, None,
         "a cross-process resume has an incomplete seen-set and must not claim reconciliation"
+    );
+}
+
+/// `--full` is a forcing flag, not merely a default the marker can also
+/// supply: it must still walk past the watermark and every existing item
+/// even when a marker from an earlier full walk is already on record.
+#[tokio::test]
+async fn explicit_full_forces_a_walk_even_with_a_marker_present() {
+    use github_repo_meta_fetch::config::Reserve;
+    use github_repo_meta_fetch::ratelimit::store::RateLimitStore;
+    use github_repo_meta_fetch::sync::Syncer;
+
+    let server = MockServer::start().await;
+    for p in ["/repos/o/r/labels", "/repos/o/r/milestones"] {
+        Mock::given(method("GET"))
+            .and(path(p))
+            .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+            .mount(&server)
+            .await;
+    }
+    // Three pages, every item below the watermark seeded below -- a marker
+    // is also present, so only the forced `full: true` (not the marker's
+    // absence) can explain a walk that reaches all three.
+    mount_three_pages(&server).await;
+
+    let client = client_for(&server);
+    let conn = store::open_in_memory().unwrap();
+    store::repo_meta::ensure(&conn, "o", "r").unwrap();
+    store::sync_state::complete(
+        &conn,
+        "issues",
+        Some(
+            chrono::DateTime::parse_from_rfc3339("2026-06-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        ),
+        Some(
+            chrono::DateTime::parse_from_rfc3339("2026-05-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        ),
+    )
+    .unwrap();
+
+    let clk = test_clock();
+    let mut rl = RateLimitStore::open_in_memory("fp").unwrap();
+    let mut syncer = Syncer {
+        client: &client,
+        conn: &conn,
+        rl: &mut rl,
+        clock: &clk,
+        reserve: Reserve::Percent(0.10),
+        cost_ceiling: Some(30),
+        no_wait: true,
+        max_wait: None,
+        full: true, // forced despite the marker already being present
+        only: vec![sync::OnlyTarget::Issues],
+    };
+    syncer.run("o", "r").await.unwrap();
+
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM issues", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        n, 3,
+        "--full must walk past the watermark despite an existing marker"
+    );
+
+    let s = store::sync_state::get(&conn, "issues").unwrap();
+    assert_eq!(
+        s.last_full_sync_at,
+        Some(clk.0),
+        "the forced walk restamps the marker to this run's instant"
     );
 }
