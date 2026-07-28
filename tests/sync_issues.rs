@@ -468,20 +468,18 @@ async fn syncer_pause_is_driven_by_estimator_used_delta() {
     assert_eq!(n, 2);
 }
 
-// NOTE: this test deliberately deviates from the task-4 brief's Step 1.
-// Calling `sync::issues::sync_issues` directly twice with one externally
-// shared `seen` (as the brief's version did) can never go red: Task 3 already
-// hoisted `seen` above `run_phase`'s retry loop, so an externally shared set
-// accumulates regardless of the bug, and manually invoking
-// `store::mark_deleted_except` on that accumulated set afterward bypasses
-// `sync_issues`'s own (buggy) internal `started_fresh` gate entirely. Verified
-// pre-fix with a throwaway version of this same test: it passed unmodified.
+// NOTE: this test replaces the task-4 plan's original Step-1 test, which was
+// a plan defect (see the plan doc's correction note): it called
+// `sync::issues::sync_issues` directly twice with one externally shared
+// `seen`, which can never go red -- Task 3 already hoisted `seen` above
+// `run_phase`'s retry loop, so an externally shared set accumulates
+// regardless of the bug, and manually invoking `store::mark_deleted_except`
+// on that accumulated set afterward bypasses `sync_issues`'s own (buggy)
+// internal `started_fresh` gate entirely.
 //
 // This version drives the real code path with the bug -- `Syncer::run` ->
 // `run_phase`'s pause/sleep/retry loop -- and asserts on the persisted
 // `deleted` column, which only `run_phase`'s own reconciliation call can set.
-// Flagged to the team lead before writing this version; proceeding on this
-// shape rather than stalling, pending their confirmation.
 #[tokio::test]
 async fn reconciles_after_an_in_process_pause() {
     use github_repo_meta_fetch::config::Reserve;
