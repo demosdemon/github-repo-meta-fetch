@@ -569,6 +569,15 @@ async fn reconciles_after_an_in_process_pause() {
         stale.deleted,
         "the stale issue should be soft-deleted after reconciliation across the in-process pause"
     );
+
+    // The reconcile marker itself must be stamped, not just its effect on the
+    // stale row -- this is the regression the pause/resume path exists to guard.
+    let s = store::sync_state::get(&conn, "issues").unwrap();
+    assert_eq!(
+        s.last_reconciled_at,
+        Some(clk.0),
+        "a walk that only paused and resumed in-process must record reconciliation"
+    );
 }
 
 // Drives the real entrypoint (`Syncer::run`) for the common case: a fresh
