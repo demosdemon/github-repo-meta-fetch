@@ -1,6 +1,6 @@
 # Implicit full sync: per-phase full-walk tracking
 
-**Status:** proposed
+**Status:** implemented (`df07705`..`0dc9ac6`)
 **Date:** 2026-07-27
 
 ## Problem

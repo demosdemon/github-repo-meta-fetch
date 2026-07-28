@@ -28,7 +28,7 @@ cargo install --locked --git https://github.com/demosdemon/github-repo-meta-fetc
 export GITHUB_TOKEN=…                       # optional — falls back to `gh auth token`
 
 meta-fetch sync octocat/hello-world         # fetch what changed, render ./hello-world-meta/
-meta-fetch sync octocat/hello-world --full  # walk everything; reconcile deletions
+meta-fetch sync octocat/hello-world --full  # force a full walk even if one is recorded
 meta-fetch render octocat/hello-world       # re-project from the cache — no network
 meta-fetch status octocat/hello-world       # watermarks, phases, entity counts
 ```
@@ -129,7 +129,11 @@ LGTM
 
 One known window: a relationship edge (parent, sub-issue, blocked-by) can reference a same-repo issue that hasn't been synced yet, in which case its link in `hierarchy.md` or the frontmatter points at a file that doesn't exist yet. The link self-heals on the next sync that reaches the target issue.
 
-Deletion is the one thing an incremental pass cannot see (a deleted issue no longer appears in any page). `--full` walks the entire repository and soft-deletes cached items that no longer exist upstream; their rendered files are pruned on the next render. Reconciliation runs only on a *fresh* full pass — if a `--full` run pauses at the rate-limit floor, the resumed run finishes the remaining pages but skips deletion reconciliation (it has an incomplete picture of what still exists); run `--full` again for that.
+Deletion is the one thing an incremental pass cannot see (a deleted issue no longer appears in any page). A full walk covers the entire repository and soft-deletes cached items that no longer exist upstream; their rendered files are pruned on the next render. You do not have to ask for it: each phase records when it last walked everything, and a phase with no such record walks fully on its next run. So the first sync of a repository reconciles deletions on its own, and a cache that has only ever been synced incrementally converts on its next run. `--full` forces a walk even when one is already recorded.
+
+Reconciliation is stricter than the walk itself: it needs a walk that both started fresh and ran to completion, because a walk resumed from a checkpoint has only seen the pages after it. A walk that pauses at the rate-limit floor and waits for the reset still reconciles — it never left the process. A walk resumed after `--no-wait` exited does not, because the set of items it saw died with the previous process.
+
+`meta-fetch status` and the tree's own `README.md` report both facts per phase. A populated `full_sync` beside `reconciled: never` means the history is current but soft-deletes are outstanding; a single uninterrupted `--full` clears it.
 
 ## Rate-limit awareness
 
@@ -146,6 +150,8 @@ On reaching the reserve floor, `sync` either sleeps until the quota resets (capp
 meta-fetch sync octocat/hello-world --no-wait
 ```
 
+Reaching the floor was never gated on `--full`: it's checked on every page of every phase, `--full` or not. What changes with implicit full walks is how often it happens — the first `sync` of a repository whose history exceeds one rate-limit window will now routinely hit the floor and exit 75 with no `--full` in sight, simply because that first run has a full walk to do. Automation that has only ever seen exit `0` from plain `sync` needs to treat `75` as retryable.
+
 ## Command reference
 
 ### `meta-fetch sync <owner/repo>`
@@ -156,7 +162,7 @@ Incremental fetch + render.
 | :--- | :--- | :--- |
 | `--out DIR` | `./<repo>-meta` | Output directory for the Markdown tree |
 | `--db PATH` | per-repo data dir | Override the cache location |
-| `--full` | off | Walk everything; reconcile deletions |
+| `--full` | off | Force a full walk even when one is already recorded |
 | `--only <issues\|prs>` | all phases | Restrict to one entity phase (repeatable) |
 | `--reserve <N\|N%>` | `10%` | Quota floor left untouched for other tools |
 | `--max-wait DUR` | unbounded | Cap a rate-limit sleep (e.g. `45m`) |
