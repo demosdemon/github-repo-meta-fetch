@@ -593,14 +593,24 @@ needs.
   next `sync` walks it again. This is a consequence of the old schema, not a
   migration defect, and the redundant walk is a one-time cost — but it will look
   like a bug to anyone who worked that way.
-- **Plain `sync` can now exit 75 far more often.** Pausing at the reserve floor
-  was never gated on `--full` — `budget_ok` is consulted on every page
-  (`src/sync/issues.rs:684`), so an incremental run with enough recent activity
-  could always pause. What changes is the likelihood: the first post-upgrade
-  `sync` of a repository whose history exceeds one rate-limit window will
-  routinely exit 75 without the caller passing `--full`. Automation that has
-  only ever observed exit 0 from plain `sync` may not treat 75 as retryable, so
-  the README edits below should say this explicitly.
+- **Plain `sync` can now block, or exit 75, far more often.** Reaching the
+  reserve floor was never gated on `--full` — `budget_ok` is consulted on
+  every page (`src/sync/issues.rs:688`), so an incremental run with enough
+  recent activity could always pause. What changes is the likelihood: the
+  first post-upgrade `sync` of a repository whose history exceeds one
+  rate-limit window will now routinely reach the floor with no `--full` in
+  sight, simply because that run has a full walk to do. The default path does
+  *not* exit 75 for this: `run_phase` sleeps until reset and continues
+  (`src/sync/mod.rs:222-234`), and `--max-wait` is unbounded by default, so the
+  practical consequence for most callers is a long block — up to an hour per
+  window, more for a repository spanning several — where the same invocation
+  used to return in seconds. Only `--no-wait` exits 75, and that remains what
+  automation should treat as retryable. A capped `--max-wait` doesn't avoid the
+  block either: once the cap expires, `run_phase` retries immediately, but the
+  floor hasn't actually reset, so the retry typically drains exactly one page
+  before pausing again (`src/sync/issues.rs:688`) — it degrades to roughly one
+  page per `--max-wait` interval rather than failing. The README edits below
+  need to say all of this, not just the exit code.
 - **The first sync of a new repository now reconciles deletions.** On an empty
   cache this is a no-op, but the run does build a seen-set of every node id,
   costing memory proportional to the repository's item count. That cost already

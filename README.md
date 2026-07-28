@@ -131,9 +131,9 @@ One known window: a relationship edge (parent, sub-issue, blocked-by) can refere
 
 Deletion is the one thing an incremental pass cannot see (a deleted issue no longer appears in any page). A full walk covers the entire repository and soft-deletes cached items that no longer exist upstream; their rendered files are pruned on the next render. You do not have to ask for it: each phase records when it last walked everything, and a phase with no such record walks fully on its next run. So the first sync of a repository reconciles deletions on its own, and a cache that has only ever been synced incrementally converts on its next run. `--full` forces a walk even when one is already recorded.
 
-Reconciliation is stricter than the walk itself: it needs a walk that both started fresh and ran to completion, because a walk resumed from a checkpoint has only seen the pages after it. A walk that pauses at the rate-limit floor and waits for the reset still reconciles — it never left the process. A walk resumed after `--no-wait` exited does not, because the set of items it saw died with the previous process.
+Reconciliation is stricter than the walk itself: it needs a walk that both started fresh and ran to completion, because a walk resumed from a checkpoint has only seen the pages after it. A walk that pauses at the rate-limit floor and waits for the reset still reconciles — it never left the process. A walk resumed after any interruption that ended the process — a `--no-wait` exit, Ctrl-C, a crash — does not, because the set of items it saw died with the previous process.
 
-`meta-fetch status` and the tree's own `README.md` both report these two facts per phase. When a phase has a full-walk timestamp but no reconcile timestamp — `reconciled: None` in `status`, `last reconciled: never` in the tree's `README.md` — the history is current but soft-deletes are outstanding; a single uninterrupted `--full` clears it.
+`meta-fetch status` and the tree's own `README.md` both report these two facts per phase. When a phase has a full-walk timestamp but no reconcile timestamp — `reconciled: None` in `status`, `last reconciled: never` in the tree's `README.md` — no reconciliation is on record for that phase; a single uninterrupted `--full` establishes one. That's not necessarily a problem to fix: a cache upgraded from an older version of `meta-fetch` starts with no reconcile record regardless of its actual history, because the old schema had no faithful way to know whether a completed full walk was also the fresh, uninterrupted pass that reconciled.
 
 ## Rate-limit awareness
 
@@ -150,7 +150,13 @@ On reaching the reserve floor, `sync` either sleeps until the quota resets (capp
 meta-fetch sync octocat/hello-world --no-wait
 ```
 
-Reaching the floor was never gated on `--full`: it's checked on every page of every phase, `--full` or not. What changes with implicit full walks is how often it happens — the first `sync` of a repository whose history exceeds one rate-limit window will now routinely hit the floor and exit 75 with no `--full` in sight, simply because that first run has a full walk to do. Automation that has only ever seen exit `0` from plain `sync` needs to treat `75` as retryable.
+Reaching the floor was never gated on `--full`: it's checked on every page of every phase, `--full` or not. What changes with implicit full walks is how often it happens — the first `sync` of a repository whose history exceeds one rate-limit window now routinely reaches it, simply because that first run has a full walk to do. What happens next depends on the flags:
+
+- **Without `--no-wait`** (the default), `sync` sleeps until the quota resets and keeps going — it does not exit 75. Since `--max-wait` is unbounded by default, the practical effect is that a first post-upgrade `sync` of a large repository can **block for a long time**: up to an hour per rate-limit window, and potentially several windows in a row, where the same invocation used to return in seconds.
+- **With `--no-wait`**, the run checkpoints and exits `75` instead of sleeping. That's the case automation should treat as retryable, same as before this change.
+- **`--max-wait` caps the sleep, but is not a substitute for `--no-wait`.** Once the cap expires, `sync` retries immediately even though the floor hasn't actually reset, so the retry typically drains exactly one page before pausing again. A capped wait degrades to roughly one page per `--max-wait` interval rather than failing outright — usable, but not fast, and not a "give up and let me retry later" option the way `--no-wait` is.
+
+Automation built against plain `sync` should pick one of the two shapes deliberately: block (leave `--max-wait` unbounded) or fail fast and resume later (`--no-wait`).
 
 ## Command reference
 
