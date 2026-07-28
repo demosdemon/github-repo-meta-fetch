@@ -468,6 +468,111 @@ async fn syncer_pause_is_driven_by_estimator_used_delta() {
     assert_eq!(n, 2);
 }
 
+// NOTE: this test deliberately deviates from the task-4 brief's Step 1.
+// Calling `sync::issues::sync_issues` directly twice with one externally
+// shared `seen` (as the brief's version did) can never go red: Task 3 already
+// hoisted `seen` above `run_phase`'s retry loop, so an externally shared set
+// accumulates regardless of the bug, and manually invoking
+// `store::mark_deleted_except` on that accumulated set afterward bypasses
+// `sync_issues`'s own (buggy) internal `started_fresh` gate entirely. Verified
+// pre-fix with a throwaway version of this same test: it passed unmodified.
+//
+// This version drives the real code path with the bug -- `Syncer::run` ->
+// `run_phase`'s pause/sleep/retry loop -- and asserts on the persisted
+// `deleted` column, which only `run_phase`'s own reconciliation call can set.
+// Flagged to the team lead before writing this version; proceeding on this
+// shape rather than stalling, pending their confirmation.
+#[tokio::test]
+async fn reconciles_after_an_in_process_pause() {
+    use github_repo_meta_fetch::config::Reserve;
+    use github_repo_meta_fetch::ratelimit::store::RateLimitStore;
+    use github_repo_meta_fetch::sync::OnlyTarget;
+    use github_repo_meta_fetch::sync::Outcome;
+    use github_repo_meta_fetch::sync::Syncer;
+
+    let server = MockServer::start().await;
+    for p in ["/repos/o/r/labels", "/repos/o/r/milestones"] {
+        Mock::given(method("GET"))
+            .and(path(p))
+            .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+            .mount(&server)
+            .await;
+    }
+    // Page 1: low remaining headers -> budget_ok returns false -> run_phase
+    // pauses, sleeps (reset is already in the past relative to the fixed
+    // clock, so the sleep is instant), and re-calls sync_issues.
+    let low = ResponseTemplate::new(200)
+        .insert_header("x-ratelimit-resource", "graphql")
+        .insert_header("x-ratelimit-limit", "5000")
+        .insert_header("x-ratelimit-remaining", "100")
+        .insert_header("x-ratelimit-used", "4900")
+        .insert_header("x-ratelimit-reset", "1781564821")
+        .set_body_string(page(&issue_node(1, "2026-06-10T00:00:00Z"), true, "CUR1"));
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .and(body_string_contains("issues("))
+        .respond_with(low)
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    // Page 2: healthy remaining, no next page -> the phase completes.
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .and(body_string_contains("issues("))
+        .respond_with(rl_headers(ResponseTemplate::new(200).set_body_string(
+            page(&issue_node(2, "2026-06-09T00:00:00Z"), false, ""),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server);
+    let conn = store::open_in_memory().unwrap();
+    store::repo_meta::ensure(&conn, "o", "r").unwrap();
+
+    // A cached issue that the walk will not see: it must be soft-deleted.
+    conn.execute(
+        "INSERT INTO issues (node_id, number, title, state, body, created_at, updated_at, deleted)
+         VALUES ('I_stale', 99, 'gone', 'OPEN', '', 0, 0, 0)",
+        [],
+    )
+    .unwrap();
+
+    let mut rl = RateLimitStore::open_in_memory("fp").unwrap();
+    let clk = test_clock();
+    let mut syncer = Syncer {
+        client: &client,
+        conn: &conn,
+        rl: &mut rl,
+        clock: &clk,
+        reserve: Reserve::Percent(0.10),
+        cost_ceiling: Some(30),
+        no_wait: false,
+        max_wait: None,
+        full: true,
+        only: vec![OnlyTarget::Issues],
+    };
+    let outcome = syncer.run("o", "r").await.unwrap();
+    assert_eq!(outcome, Outcome::Completed);
+
+    // Both pages were persisted.
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM issues WHERE deleted = 0", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(n, 2);
+
+    // Reconciliation spans the whole walk (both pages), so the stale issue
+    // -- seen by neither page -- must be soft-deleted.
+    let stale = store::issues::get_issue_by_number(&conn, 99)
+        .unwrap()
+        .unwrap();
+    assert!(
+        stale.deleted,
+        "the stale issue should be soft-deleted after reconciliation across the in-process pause"
+    );
+}
+
 #[tokio::test]
 async fn full_reconcile_marks_missing_issue_deleted() {
     use github_repo_meta_fetch::model::Issue;
@@ -524,6 +629,12 @@ async fn full_reconcile_marks_missing_issue_deleted() {
         .await
         .unwrap();
     assert!(matches!(stop, SyncStop::Completed));
+
+    // sync_issues no longer reconciles on its own (that moved to run_phase's
+    // caller); a direct call must reconcile explicitly, exactly as run_phase
+    // now does after its retry loop exits.
+    store::mark_deleted_except(&conn, "issues", &seen).unwrap();
+
     // #1 present & not deleted; #99 now soft-deleted.
     assert!(
         !store::issues::get_issue_by_number(&conn, 1)

@@ -532,6 +532,22 @@ inline Utc::now() calls did."
 
 **Why this task exists:** `sync_issues` computes `started_fresh` from the resume cursor at entry (`src/sync/issues.rs:618`), but `run_phase` re-calls it after a pause — so the continuation reads the cursor its own predecessor just checkpointed, sees `started_fresh == false`, and skips reconciliation. This is not specific to `--no-wait`; the default sleep-until-reset path has the same hole. Since `complete` then clears the cursor, the next invocation restarts from the top, so on a repository too large for one rate-limit window, reconciliation is unreachable through *any* invocation.
 
+> **Correction, made during execution.** An earlier version of this step
+> proposed a test that called `sync_issues` directly twice with a shared
+> external `seen` and asserted `seen.len() == 2`. That test cannot go red:
+> Task 3 already moved `seen` to a `run_phase` local (`src/sync/mod.rs:164`,
+> before the loop at `:166`), because making it a phase-function parameter
+> meant something had to own it. The surviving bug is the `started_fresh` gate
+> *inside* each phase function, which only manifests through the retry loop.
+>
+> The test must therefore drive `Syncer::run` with `no_wait: false` — so the
+> in-process sleep-until-reset path is the one exercised — and assert on the
+> **persisted `deleted` flag** of a pre-seeded stale row, not on a manually
+> invoked `mark_deleted_except`. The `x-ratelimit-reset` header the test
+> fixtures already use (`1781564821` = 2026-06-15) is earlier than the
+> `FixedClock` instant (2026-07-20), so `wait_for` returns zero and the test
+> does not really sleep.
+
 - [ ] **Step 1: Write the failing regression test**
 
 Add to `tests/sync_issues.rs`:

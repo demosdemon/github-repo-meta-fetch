@@ -620,8 +620,6 @@ where
     let repo = ctx.repo;
     let state = sync_state::get(conn, ENTITY)?;
     let watermark = state.updated_watermark;
-    // Capture whether this is a fresh (non-resumed) run before mutating the cursor.
-    let started_fresh = state.resume_cursor.is_none();
     let mut cursor = state.resume_cursor;
     // Highest `updatedAt` seen this pass: the early-stop floor for the next run.
     let mut run_max: Option<DateTime<Utc>> = None;
@@ -696,13 +694,6 @@ where
     // synced. Keeping the larger value costs at most a re-walk, never a skip.
     // `None` sorts below `Some`, so this also handles either side being unset.
     sync_state::complete(conn, ENTITY, run_max.max(watermark))?;
-
-    // Soft-delete reconciliation runs only on a fresh full pass. A resumed full
-    // run has an incomplete seen-set (it re-walked only the remaining pages), so
-    // reconciling would wrongly delete entities seen on the skipped pages.
-    if full && started_fresh {
-        crate::store::issues::mark_deleted_except(conn, seen)?;
-    }
 
     Ok(SyncStop::Completed)
 }

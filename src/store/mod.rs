@@ -111,8 +111,13 @@ impl Executor for rusqlite::Transaction<'_> {
 
 /// Mark every non-deleted row in `table` whose `node_id` is not in `seen` as
 /// deleted. Returns the count newly marked. `table` MUST be a trusted literal
-/// (it is interpolated into SQL); callers pass `"issues"` or `"pull_requests"`.
-pub(crate) fn mark_deleted_except<S: std::hash::BuildHasher>(
+/// (it is interpolated into SQL); callers pass `"issues"` or
+/// `"pull_requests"`.
+///
+/// # Errors
+///
+/// Returns a [`rusqlite::Error`] if the update fails.
+pub fn mark_deleted_except<S: std::hash::BuildHasher>(
     conn: &Connection,
     table: &'static str,
     seen: &std::collections::HashSet<String, S>,

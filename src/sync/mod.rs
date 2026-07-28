@@ -154,6 +154,9 @@ impl Syncer<'_> {
         let reserve = self.reserve;
         let full = self.full;
         let qt = phase.query_type();
+        let state = crate::store::sync_state::get(self.conn, phase.entity())?;
+        let started_fresh = state.resume_cursor.is_none();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let ctx = WalkCtx {
             client: self.client,
             conn: self.conn,
@@ -161,7 +164,6 @@ impl Syncer<'_> {
             repo,
             clock: self.clock,
         };
-        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         loop {
             // budget_ok: reconcile the shared store from the authoritative
@@ -209,9 +211,11 @@ impl Syncer<'_> {
             };
 
             match stop {
+                // Was `return Ok(Outcome::Completed)`; now breaks so the
+                // reconciliation below is reachable.
                 SyncStop::Completed => {
                     tracing::info!(phase = ?phase, "phase complete");
-                    return Ok(Outcome::Completed);
+                    break;
                 }
                 SyncStop::Paused => {
                     if self.no_wait {
@@ -228,6 +232,14 @@ impl Syncer<'_> {
                 }
             }
         }
+
+        // Reconciliation needs a walk that both started fresh and finished:
+        // a walk resumed from an *earlier process*'s checkpoint re-walked only
+        // the pages after it, so its seen-set is incomplete.
+        if full && started_fresh {
+            crate::store::mark_deleted_except(self.conn, phase.entity(), &seen)?;
+        }
+        Ok(Outcome::Completed)
     }
 }
 
@@ -243,6 +255,19 @@ impl Phase {
         match self {
             Phase::Issues => QueryType::IssuesPage,
             Phase::Prs => QueryType::PrsPage,
+        }
+    }
+
+    /// The `sync_state.entity_type` key for this phase.
+    ///
+    /// Doubles as the table name for deletion reconciliation — the entity
+    /// keys and the table names deliberately coincide as `issues` and
+    /// `pull_requests`. Renaming one without the other fails at runtime
+    /// against a nonexistent table, not at compile time.
+    fn entity(self) -> &'static str {
+        match self {
+            Phase::Issues => "issues",
+            Phase::Prs => "pull_requests",
         }
     }
 }

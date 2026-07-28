@@ -304,19 +304,6 @@ pub fn pr_numbers(conn: &Connection) -> rusqlite::Result<Vec<i64>> {
     rows.collect()
 }
 
-/// Mark every non-deleted PR whose `node_id` is NOT in `seen` as deleted.
-/// Returns the number newly marked deleted.
-///
-/// # Errors
-///
-/// Returns a [`rusqlite::Error`] on database failure.
-pub fn mark_deleted_except<S: std::hash::BuildHasher>(
-    conn: &Connection,
-    seen: &std::collections::HashSet<String, S>,
-) -> rusqlite::Result<usize> {
-    crate::store::mark_deleted_except(conn, "pull_requests", seen)
-}
-
 /// Counts of non-deleted PRs by effective state: `(open, draft, closed,
 /// merged)`.
 ///
@@ -519,7 +506,10 @@ mod tests {
         upsert_pull_request(&conn, &p2).unwrap();
         let mut seen = std::collections::HashSet::new();
         seen.insert("P1".to_string());
-        assert_eq!(mark_deleted_except(&conn, &seen).unwrap(), 1);
+        assert_eq!(
+            crate::store::mark_deleted_except(&conn, "pull_requests", &seen).unwrap(),
+            1
+        );
         assert!(get_pr_by_number(&conn, 2).unwrap().unwrap().deleted);
         // counts exclude deleted; P1 merged, P2 now deleted
         let (open, draft, closed, merged) = effective_state_counts(&conn).unwrap();

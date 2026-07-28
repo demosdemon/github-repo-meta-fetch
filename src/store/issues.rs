@@ -206,19 +206,6 @@ pub fn related_numbers(conn: &Connection, issue_node_id: &str) -> rusqlite::Resu
     rows.collect()
 }
 
-/// Mark every non-deleted issue whose `node_id` is NOT in `seen` as deleted.
-/// Returns the number newly marked deleted.
-///
-/// # Errors
-///
-/// Returns a [`rusqlite::Error`] if any database operation fails.
-pub fn mark_deleted_except<S: std::hash::BuildHasher>(
-    conn: &Connection,
-    seen: &std::collections::HashSet<String, S>,
-) -> rusqlite::Result<usize> {
-    crate::store::mark_deleted_except(conn, "issues", seen)
-}
-
 #[cfg(test)]
 mod full_tests {
     use chrono::DateTime;
@@ -258,7 +245,10 @@ mod full_tests {
         upsert_issue(&conn, &iss("I2", 2)).unwrap();
         let mut seen = std::collections::HashSet::new();
         seen.insert("I1".to_string());
-        assert_eq!(mark_deleted_except(&conn, &seen).unwrap(), 1);
+        assert_eq!(
+            crate::store::mark_deleted_except(&conn, "issues", &seen).unwrap(),
+            1
+        );
         assert!(get_issue_by_number(&conn, 2).unwrap().unwrap().deleted);
         assert!(!get_issue_by_number(&conn, 1).unwrap().unwrap().deleted);
     }
@@ -269,7 +259,10 @@ mod full_tests {
         let conn = crate::store::open_in_memory().unwrap();
         upsert_issue(&conn, &iss("I1", 1)).unwrap();
         let seen = std::collections::HashSet::new();
-        assert_eq!(mark_deleted_except(&conn, &seen).unwrap(), 1);
+        assert_eq!(
+            crate::store::mark_deleted_except(&conn, "issues", &seen).unwrap(),
+            1
+        );
         assert!(get_issue_by_number(&conn, 1).unwrap().unwrap().deleted);
         upsert_issue(&conn, &iss("I1", 1)).unwrap(); // deleted=false in the model → revives
         assert!(!get_issue_by_number(&conn, 1).unwrap().unwrap().deleted);
@@ -281,7 +274,10 @@ mod full_tests {
         upsert_issue(&conn, &iss("I1", 1)).unwrap();
         upsert_issue(&conn, &iss("I2", 2)).unwrap();
         let seen = std::collections::HashSet::new();
-        assert_eq!(mark_deleted_except(&conn, &seen).unwrap(), 2);
+        assert_eq!(
+            crate::store::mark_deleted_except(&conn, "issues", &seen).unwrap(),
+            2
+        );
         assert!(get_issue_by_number(&conn, 1).unwrap().unwrap().deleted);
         assert!(get_issue_by_number(&conn, 2).unwrap().unwrap().deleted);
     }
