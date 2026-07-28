@@ -39,7 +39,7 @@ use crate::sync::next_cursor;
 use crate::sync::relationships::endpoint;
 use crate::sync::relationships::self_endpoint;
 
-const ENTITY: &str = "issues";
+pub(crate) const ENTITY: &str = "issues";
 
 /// A single issue node mapped into domain types, plus follow-up page cursors.
 pub struct MappedIssue {

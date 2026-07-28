@@ -111,7 +111,11 @@ impl Syncer<'_> {
     pub async fn run(&mut self, owner: &str, repo: &str) -> anyhow::Result<Outcome> {
         let mut estimator = CostEstimator::new(self.cost_ceiling);
 
-        tracing::info!(owner = %owner, repo = %repo, full = self.full, "starting sync");
+        // `explicit_full`, not `full`: this is the `--full` flag as given, before
+        // any phase resolves whether it actually needs a full walk (logged
+        // per-phase below) -- naming it `full` here previously read as
+        // contradicting the very next "no full walk recorded" line.
+        tracing::info!(owner = %owner, repo = %repo, explicit_full = self.full, "starting sync");
         crate::sync::taxonomy::sync_labels(self.client, self.conn, owner, repo).await?;
         crate::sync::taxonomy::sync_milestones(self.client, self.conn, owner, repo).await?;
 
@@ -269,8 +273,8 @@ impl Phase {
     /// against a nonexistent table, not at compile time.
     fn entity(self) -> &'static str {
         match self {
-            Phase::Issues => "issues",
-            Phase::Prs => "pull_requests",
+            Phase::Issues => crate::sync::issues::ENTITY,
+            Phase::Prs => crate::sync::prs::ENTITY,
         }
     }
 }

@@ -118,7 +118,7 @@ impl Executor for rusqlite::Transaction<'_> {
 /// # Errors
 ///
 /// Returns a [`rusqlite::Error`] if the update fails.
-pub fn mark_deleted_except<S: std::hash::BuildHasher>(
+pub(crate) fn mark_deleted_except<S: std::hash::BuildHasher>(
     conn: &Connection,
     table: &'static str,
     seen: &std::collections::HashSet<String, S>,

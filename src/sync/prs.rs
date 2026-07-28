@@ -552,6 +552,9 @@ where
     // so its `run_max` is older than what the interrupted first attempt already
     // synced. Keeping the larger value costs at most a re-walk, never a skip.
     // `None` sorts below `Some`, so this also handles either side being unset.
+    // Hoisted to a local, unlike the equivalent inline expression in
+    // `sync_issues`, purely to keep this function under clippy's
+    // `too_many_lines`; no behavioral difference from the inline form.
     let full_sync_at = full.then(|| clock.now());
     sync_state::complete(conn, ENTITY, run_max.max(watermark), full_sync_at)?;
 

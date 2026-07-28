@@ -155,11 +155,16 @@ pub fn complete(
 
 /// Record that this phase reconciled deletions at `at`.
 ///
-/// Written separately from [`complete`], which runs inside the phase function
-/// before and independently of the reconciliation `run_phase` performs after
-/// its retry loop. A crash between the two leaves rows soft-deleted with the
-/// marker unset, so the next full walk reconciles again — `mark_deleted_except`
-/// is idempotent, making that a redundant pass rather than a corruption.
+/// Written separately from [`complete`], which stamps `last_full_sync_at`
+/// inside the phase function, before and independently of the
+/// `mark_deleted_except` + `mark_reconciled` pair `run_phase` performs after
+/// its retry loop exits. That window is narrow, but a crash inside it leaves
+/// rows soft-deleted with this marker unset. Because `last_full_sync_at` was
+/// already stamped by then, the *next* run does not see an unstamped phase
+/// and so does not implicitly re-walk everything — the divergence only
+/// over-reports outstanding reconciliation (`status` and the rendered
+/// `README.md` show `reconciled: None` even though the deletes already
+/// landed), and clears only when the caller runs an explicit `--full`.
 ///
 /// # Errors
 ///
