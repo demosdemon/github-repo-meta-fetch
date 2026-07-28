@@ -571,11 +571,21 @@ async fn reconciles_after_an_in_process_pause() {
     );
 }
 
+// Drives the real entrypoint (`Syncer::run`) for the common case: a fresh
+// full sync that completes in a single call, no pause. This is distinct from
+// `reconciles_after_an_in_process_pause` above (which covers the multi-page,
+// paused-then-resumed walk) -- reconciliation is unconditional after
+// run_phase's retry loop exits, so the 2-iteration case strictly implies the
+// 1-iteration case works too, but that's a logical argument, not a test.
 #[tokio::test]
 async fn full_reconcile_marks_missing_issue_deleted() {
+    use github_repo_meta_fetch::config::Reserve;
     use github_repo_meta_fetch::model::Issue;
     use github_repo_meta_fetch::model::IssueState;
-    use github_repo_meta_fetch::sync::issues::SyncStop;
+    use github_repo_meta_fetch::ratelimit::store::RateLimitStore;
+    use github_repo_meta_fetch::sync::OnlyTarget;
+    use github_repo_meta_fetch::sync::Outcome;
+    use github_repo_meta_fetch::sync::Syncer;
 
     // Pre-seed the DB with a stale issue (#99) that the server will NOT return.
     let conn = store::open_in_memory().unwrap();
@@ -602,8 +612,18 @@ async fn full_reconcile_marks_missing_issue_deleted() {
     };
     store::issues::upsert_issue(&conn, &stale).unwrap();
 
-    // Server returns a single page with only issue #1.
+    // Server returns a single page with only issue #1, with healthy
+    // rate-limit headers -- budget_ok is never even consulted, since
+    // sync_issues breaks out on `!page_info.has_next_page` before reaching
+    // the budget check. No pause, one call, one loop iteration.
     let server = MockServer::start().await;
+    for p in ["/repos/o/r/labels", "/repos/o/r/milestones"] {
+        Mock::given(method("GET"))
+            .and(path(p))
+            .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+            .mount(&server)
+            .await;
+    }
     Mock::given(method("POST"))
         .and(path("/graphql"))
         .respond_with(rl_headers(ResponseTemplate::new(200).set_body_string(
@@ -611,29 +631,28 @@ async fn full_reconcile_marks_missing_issue_deleted() {
         )))
         .mount(&server)
         .await;
-    let octo = octocrab::Octocrab::builder()
-        .base_uri(server.uri())
-        .unwrap()
-        .personal_token("t".to_string())
-        .build()
-        .unwrap();
-    let client = GithubClient::new(octo);
+    let client = client_for(&server);
 
     // FULL run, fresh (no resume cursor), completes uninterrupted.
+    let mut rl = RateLimitStore::open_in_memory("fp").unwrap();
     let clk = test_clock();
-    let ctx = walk_ctx(&client, &conn, &clk);
-    let mut seen = std::collections::HashSet::new();
-    let stop = sync::issues::sync_issues(&ctx, true, &mut seen, |_h| true)
-        .await
-        .unwrap();
-    assert!(matches!(stop, SyncStop::Completed));
+    let mut syncer = Syncer {
+        client: &client,
+        conn: &conn,
+        rl: &mut rl,
+        clock: &clk,
+        reserve: Reserve::Percent(0.10),
+        cost_ceiling: Some(30),
+        no_wait: false,
+        max_wait: None,
+        full: true,
+        only: vec![OnlyTarget::Issues],
+    };
+    let outcome = syncer.run("o", "r").await.unwrap();
+    assert_eq!(outcome, Outcome::Completed);
 
-    // sync_issues no longer reconciles on its own (that moved to run_phase's
-    // caller); a direct call must reconcile explicitly, exactly as run_phase
-    // now does after its retry loop exits.
-    store::mark_deleted_except(&conn, "issues", &seen).unwrap();
-
-    // #1 present & not deleted; #99 now soft-deleted.
+    // #1 present & not deleted; #99 now soft-deleted -- reconciled by
+    // run_phase itself after its retry loop, with no manual reconcile call.
     assert!(
         !store::issues::get_issue_by_number(&conn, 1)
             .unwrap()
